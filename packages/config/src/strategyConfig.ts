@@ -8,7 +8,7 @@
  */
 
 export const FORMULA_VERSION = "1.0.0";
-export const STRATEGY_CONFIG_VERSION = "v1-2026-09-09";
+export const STRATEGY_CONFIG_VERSION = "v2-2026-09-10";
 
 export interface BrokerConcentrationThresholds {
   /** minimum net-buy share of a single broker to count as a "meaningful buyer" */
@@ -106,11 +106,13 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
     watchlistMin: 50
   },
   risk: {
-    totalCapital: 5_000_000,
+    // User's live capital (2026-09-10): Rp 3,800,000. Keep ~Rp 1jt cash
+    // reserve, deploy at most Rp 2.8jt into a single position at a time.
+    totalCapital: 3_800_000,
     riskPerTradePct: 0.0075,
     riskPerTradePctMin: 0.005,
     riskPerTradePctMax: 0.01,
-    maxDeployedCapital: 3_000_000,
+    maxDeployedCapital: 2_800_000,
     cashReserve: 1_000_000,
     maxSimultaneousPositions: 1,
     tp1AllocationPct: 0.6,
@@ -120,9 +122,9 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
     minNetRewardToRisk: 2,
     chaseMaxPctAboveBAvg: 0.035,
     slippageAllowancePerShare: 2,
-    // PROVISIONAL: not specified numerically in blueprint; typical Indonesian
-    // retail broker rates. Must be confirmed/overridden per user's actual
-    // broker before any real-capital use.
+    // Stockbit Sekuritas all-in rates (brokerage + IDX/KPEI/KSEI levies + PPN,
+    // and the 0.1% final PPh on the sell side): buy ~0.15%, sell ~0.25%.
+    // If your Stockbit trade confirmation shows different, adjust here.
     buyFeeRate: 0.0015,
     sellFeeRate: 0.0025,
     lotSizeShares: 100,
