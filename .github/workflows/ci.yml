@@ -107,6 +107,7 @@ jobs:
           host: ${{ secrets.DEPLOY_APP_HOST }}
           username: ${{ secrets.DEPLOY_APP_USER }}
           key: ${{ secrets.DEPLOY_APP_SSH_KEY }}
+          command_timeout: 30m
           script: |
             set -euo pipefail
             cd ${{ secrets.DEPLOY_APP_PATH }}
