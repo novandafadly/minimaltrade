@@ -1,0 +1,22 @@
+{
+  "name": "@idx/domain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@idx/config": "workspace:*",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "fast-check": "^3.22.0",
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4"
+  }
+}

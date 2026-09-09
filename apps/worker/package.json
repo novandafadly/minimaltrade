@@ -1,0 +1,29 @@
+{
+  "name": "@idx/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@idx/config": "workspace:*",
+    "@idx/db": "workspace:*",
+    "@idx/domain": "workspace:*",
+    "ioredis": "^5.4.1",
+    "@aws-sdk/client-s3": "^3.687.0",
+    "zod": "^3.23.8",
+    "uuid": "^11.0.2"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "tsx": "^4.19.2",
+    "vitest": "^2.1.4",
+    "fast-check": "^3.22.0",
+    "nock": "^13.5.6"
+  }
+}

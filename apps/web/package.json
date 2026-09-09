@@ -1,0 +1,32 @@
+{
+  "name": "@idx/web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "lint": "next lint",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@idx/config": "workspace:*",
+    "@idx/db": "workspace:*",
+    "@idx/domain": "workspace:*",
+    "next": "^14.2.18",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "@tanstack/react-query": "^5.59.20",
+    "zustand": "^5.0.1",
+    "@tanstack/react-virtual": "^3.10.9"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "typescript": "^5.6.3",
+    "eslint-config-next": "^14.2.18",
+    "vitest": "^2.1.4"
+  }
+}
