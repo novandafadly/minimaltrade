@@ -146,33 +146,41 @@ describe("getAnalysis", () => {
 });
 
 describe("getBrokerSummary", () => {
+  // Shape verified against a real https://stock.arjum.com/api/broker-summary/{code}
+  // response (2026-09-09, BBCA) -- see packages/domain/src/schemas/README.md.
   const validPayload = {
-    symbol: "BBCA",
-    trading_date: "2026-09-09",
-    segment: "regular",
-    status: "final",
+    stock_code: "BBCA",
+    broker_start_date: "2026-09-09",
+    broker_end_date: "2026-09-09",
+    broker_net: false,
+    flow: "all",
     brokers: [
       {
         broker_code: "YP",
-        buy_volume: 100000,
-        buy_value: 950000000,
-        sell_volume: 20000,
-        sell_value: 190000000,
-        avg_buy_price: "9500",
-        avg_sell_price: "9500"
+        broker_name: "MIRAE ASSET SEKURITAS INDONESIA",
+        bval: 950000000,
+        bvol: 100000,
+        bfrq: 120,
+        sval: 190000000,
+        svol: 20000,
+        sfrq: 30
       }
-    ]
+    ],
+    broker_levels: []
   };
 
   it("accepts a valid payload and normalizes net volume/value when omitted", async () => {
     nock(env.ARJUM_API_BASE_URL).get("/api/broker-summary/BBCA").reply(200, validPayload);
     const envelope = await getBrokerSummary(ctx, "BBCA");
     expect(envelope.data.brokers[0]?.netVolume).toBe(80000);
-    expect(envelope.status).toBe("final");
+    expect(envelope.data.symbol).toBe("BBCA");
+    // No status field in the real payload -- adapter defaults to provisional
+    // (see buildEnvelope's declaredStatus contract) rather than assuming final.
+    expect(envelope.status).toBe("provisional");
   });
 
-  it("rejects a payload missing trading_date", async () => {
-    const bad = { ...validPayload, trading_date: undefined };
+  it("rejects a payload missing broker_end_date", async () => {
+    const bad = { ...validPayload, broker_end_date: undefined };
     nock(env.ARJUM_API_BASE_URL).get("/api/broker-summary/BBCA").reply(200, bad);
     await expect(getBrokerSummary(ctx, "BBCA")).rejects.toBeInstanceOf(SchemaValidationError);
   });

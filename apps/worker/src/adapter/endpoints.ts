@@ -178,7 +178,15 @@ export async function getAnalysis(ctx: AdapterContext, symbol: string): Promise<
 // ---------------------------------------------------------------------
 export async function getBrokerSummary(
   ctx: AdapterContext,
-  symbol: string
+  symbol: string,
+  // The real payload carries no status/finality field at all, so the adapter
+  // itself cannot tell final EOD data from a partial/intraday read. The one
+  // caller that legitimately knows is the deep funnel, which by design (see
+  // apps/worker/src/index.ts's maybeRunDeepFunnelOnceToday) only ever runs
+  // this after the trading session has closed for the day -- it may pass
+  // assumeFinal=true to declare that. Any other caller must leave this false
+  // and accept the conservative "provisional" default.
+  assumeFinal = false
 ): Promise<DataEnvelope<BrokerSummaryData>> {
   const path = ENDPOINTS.brokerSummary.replace("{code}", symbol);
   const { parsed, receivedAt } = await fetchAndValidate(
@@ -189,14 +197,19 @@ export async function getBrokerSummary(
     brokerSummaryResponseSchema
   );
   return buildEnvelope<BrokerSummaryData>({
-    symbol: parsed.symbol,
-    tradingDate: parsed.trading_date,
+    symbol: parsed.stock_code,
+    // The endpoint returns a date RANGE (broker_start_date..broker_end_date);
+    // we treat the end date as "the trading date this data pertains to" per
+    // the DataEnvelope contract. A range narrower than exactly one day (i.e.
+    // start === end) is what the deep funnel should request for a genuine
+    // single-session EOD read -- see fetchDeep's caller in funnel/deep.ts.
+    tradingDate: parsed.broker_end_date,
     eventTime: null,
     publishedAt: null,
     receivedAt,
-    segment: parsed.segment ?? "unknown",
+    segment: "regular",
     revisionId: null,
-    declaredStatus: parsed.status,
+    declaredStatus: assumeFinal ? "final" : undefined,
     data: normalizeBrokerSummary(parsed)
   });
 }
