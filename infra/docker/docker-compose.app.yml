@@ -19,6 +19,6 @@ services:
     restart: unless-stopped
     env_file: .env
     ports:
-      - "3000:3000"
+      - "${WEB_HOST_BIND:-127.0.0.1:3005}:3000"
     depends_on:
       - worker
