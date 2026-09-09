@@ -101,7 +101,7 @@ reverse proxy in front) from the internet, and allow all egress.
 # Docker, if not already installed (Ubuntu shown; use dnf on Oracle Linux)
 curl -fsSL https://get.docker.com | sh
 
-git clone https://github.com/novandafadly/cuantrade.git /opt/idx-smart-money
+git clone https://github.com/novandafadly/minimaltrade.git /opt/idx-smart-money
 cd /opt/idx-smart-money/infra/docker
 cp .env.db.example .env
 # edit .env: set DB_VM_PRIVATE_IP to this VM's actual private IP,
@@ -119,7 +119,7 @@ VM's `.env` next.
 curl -fsSL https://get.docker.com | sh
 
 mkdir -p /opt/idx-smart-money && cd /opt/idx-smart-money
-git clone https://github.com/novandafadly/cuantrade.git .
+git clone https://github.com/novandafadly/minimaltrade.git .
 cp .env.example infra/docker/.env
 ```
 
