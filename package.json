@@ -1,0 +1,26 @@
+{
+  "name": "idx-smart-money-engine",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "pnpm -r --if-present run lint",
+    "typecheck": "pnpm -r --if-present run typecheck",
+    "test": "pnpm -r --if-present run test",
+    "build": "pnpm -r --if-present run build",
+    "db:migrate": "pnpm --filter @idx/db run migrate",
+    "db:seed": "pnpm --filter @idx/db run seed",
+    "dev:web": "pnpm --filter @idx/web run dev",
+    "dev:worker": "pnpm --filter @idx/worker run dev"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.0",
+    "@typescript-eslint/eslint-plugin": "^8.15.0",
+    "@typescript-eslint/parser": "^8.15.0",
+    "eslint": "^8.57.0",
+    "prettier": "^3.3.3",
+    "typescript": "^5.6.3"
+  }
+}
