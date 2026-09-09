@@ -24,6 +24,18 @@ import { buildRiskPlan, type OhlcvBar, type ScoreResult, type TradePlan } from "
 
 export const FIXTURE_SESSION_CLOSE_UTC = "T08:49:00.000Z"; // ~15:49 WIB, IDX Friday half-day-safe close
 
+/**
+ * Fixed capital for the synthetic fixtures. These fixtures assert exact lot
+ * counts (entry 1000 / SL 940 -> totalLots 5, so an 8k-share bar partial-
+ * fills at 4), so they must NOT track whatever capital the live
+ * DEFAULT_STRATEGY_CONFIG currently carries. Pinned to the original
+ * Rp 5,000,000 / Rp 3,000,000 sizing the fixtures were designed against.
+ */
+export const FIXTURE_STRATEGY_CONFIG: StrategyConfig = {
+  ...DEFAULT_STRATEGY_CONFIG,
+  risk: { ...DEFAULT_STRATEGY_CONFIG.risk, totalCapital: 5_000_000, maxDeployedCapital: 3_000_000 }
+};
+
 function preHistory(symbol: string, startDate: string, days: number, basePrice: number, baseVolume: number): OhlcvBar[] {
   const bars: OhlcvBar[] = [];
   const start = new Date(`${startDate}T00:00:00.000Z`);
@@ -79,7 +91,7 @@ export function buildFixturePlan(
   tradingDate: string,
   entryTrigger: number,
   stopLossRaw: number,
-  config: StrategyConfig = DEFAULT_STRATEGY_CONFIG,
+  config: StrategyConfig = FIXTURE_STRATEGY_CONFIG,
   scoreOverrides: Partial<ScoreResult> = {}
 ): TradePlan {
   return buildRiskPlan(
