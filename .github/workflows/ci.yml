@@ -75,6 +75,13 @@ jobs:
       - name: Build
         run: pnpm build
 
+  # Deploys the APP VM only (worker + web). The DB VM (Postgres + Redis) is
+  # provisioned once by hand -- see README's OCI deployment section -- and is
+  # never redeployed automatically: reapplying a stateful DB compose file on
+  # every push is how you lose data, not something CI should do for you.
+  # Schema migrations ARE safe to automate (versioned, additive, already
+  # tested in the job above), so those still run every deploy, against the
+  # DB VM over the private network.
   deploy:
     needs: lint-typecheck-test-build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
@@ -85,41 +92,25 @@ jobs:
       - name: Check deploy secrets present
         id: check
         run: |
-          if [ -n "${{ secrets.DEPLOY_HOST }}" ] && [ -n "${{ secrets.DEPLOY_SSH_KEY }}" ]; then
+          if [ -n "${{ secrets.DEPLOY_APP_HOST }}" ] && [ -n "${{ secrets.DEPLOY_APP_SSH_KEY }}" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
           else
             echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::DEPLOY_HOST/DEPLOY_SSH_KEY secrets not set; skipping deploy job."
+            echo "::notice::DEPLOY_APP_HOST/DEPLOY_APP_SSH_KEY secrets not set; skipping deploy job."
           fi
 
-      - uses: pnpm/action-setup@v4
-        if: steps.check.outputs.ready == 'true'
-        with:
-          version: 9.15.0
-
-      - uses: actions/setup-node@v4
-        if: steps.check.outputs.ready == 'true'
-        with:
-          node-version: 22
-          cache: pnpm
-
-      - name: Build production images
-        if: steps.check.outputs.ready == 'true'
-        run: |
-          docker build -f infra/docker/Dockerfile.worker -t idx-worker:${{ github.sha }} .
-          docker build -f infra/docker/Dockerfile.web -t idx-web:${{ github.sha }} .
-
-      - name: Deploy over SSH
+      - name: Deploy app VM over SSH
         if: steps.check.outputs.ready == 'true'
         uses: appleboy/ssh-action@v1.2.0
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.DEPLOY_APP_HOST }}
+          username: ${{ secrets.DEPLOY_APP_USER }}
+          key: ${{ secrets.DEPLOY_APP_SSH_KEY }}
           script: |
-            cd ${{ secrets.DEPLOY_PATH }}
+            set -euo pipefail
+            cd ${{ secrets.DEPLOY_APP_PATH }}
             git fetch origin main
             git reset --hard origin/main
-            docker compose -f infra/docker/docker-compose.prod.yml pull
-            docker compose -f infra/docker/docker-compose.prod.yml up -d --build
-            docker compose -f infra/docker/docker-compose.prod.yml exec -T worker pnpm db:migrate
+            docker compose -f infra/docker/docker-compose.app.yml up -d --build
+            docker compose -f infra/docker/docker-compose.app.yml exec -T worker pnpm --filter @idx/db run migrate
+            docker image prune -f

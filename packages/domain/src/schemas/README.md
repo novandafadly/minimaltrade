@@ -6,7 +6,7 @@ Source: `https://stock.arjum.com`, header `X-API-Key`.
 |---|---|---|
 | /api/screener/latest | PROVISIONAL | not verified against a live payload |
 | /api/analysis/{code} | PROVISIONAL | |
-| /api/broker-summary/{code} | PROVISIONAL | |
+| /api/broker-summary/{code} | VERIFIED | 2026-09-09, symbol BBCA. Field names are `stock_code`/`bval`/`bvol`/`bfrq`/`sval`/`svol`/`sfrq`/`nval`/`nvol`/`broker_levels`/`broker_start_date`/`broker_end_date` — quite different from the originally-guessed contract. No `status` or `segment` field in the real payload; adapter defaults to provisional/`segment: "regular"` unless the caller (deep funnel, which only calls this post-EOD) declares `assumeFinal=true`. See `getBrokerSummary` in `apps/worker/src/adapter/endpoints.ts`. |
 | /api/broker-accumulation/{code} | PROVISIONAL | |
 | /api/history/{code} | PROVISIONAL | |
 | /api/seasonal/{code} | PROVISIONAL | |

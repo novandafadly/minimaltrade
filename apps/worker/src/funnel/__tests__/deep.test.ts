@@ -68,14 +68,16 @@ function mockDeepFunnelCallsFor(symbol: string) {
   nock(env.ARJUM_API_BASE_URL)
     .get(`/api/broker-summary/${symbol}`)
     .reply(200, {
-      symbol,
-      trading_date: "2026-09-09",
-      segment: "regular",
-      status: "final",
+      stock_code: symbol,
+      broker_start_date: "2026-09-09",
+      broker_end_date: "2026-09-09",
+      broker_net: false,
+      flow: "all",
       brokers: [
-        { broker_code: "YP", buy_volume: 100000, buy_value: 100000000, sell_volume: 10000, sell_value: 10000000 },
-        { broker_code: "CC", buy_volume: 50000, buy_value: 50000000, sell_volume: 5000, sell_value: 5000000 }
-      ]
+        { broker_code: "YP", bval: 100000000, bvol: 100000, sval: 10000000, svol: 10000 },
+        { broker_code: "CC", bval: 50000000, bvol: 50000, sval: 5000000, svol: 5000 }
+      ],
+      broker_levels: []
     });
   nock(env.ARJUM_API_BASE_URL)
     .get(`/api/broker-accumulation/${symbol}`)

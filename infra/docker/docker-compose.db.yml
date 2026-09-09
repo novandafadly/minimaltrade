@@ -1,0 +1,50 @@
+version: "3.9"
+
+# Runs on the DB VM only. Postgres + Redis, both persisted, both bound to
+# the VM's PRIVATE interface -- never the public one. This file is applied
+# once during initial server setup and touched again only for deliberate
+# maintenance (version bumps, volume backups); CI/CD does not redeploy it
+# automatically on every push (see .github/workflows/ci.yml's `deploy` job,
+# which only ever touches the app VM).
+#
+# DB_VM_PRIVATE_IP must be set in this directory's .env (see README's OCI
+# deployment section). Binding to that specific IP -- not 0.0.0.0 -- matters
+# because Docker manipulates iptables directly and is well known to bypass
+# ufw/firewalld rules; relying on the host firewall alone to keep 5432/6379
+# off the public interface is not sufficient.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: idx
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: idx_smart_money
+    ports:
+      - "${DB_VM_PRIVATE_IP:?}:5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U idx"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?}
+    ports:
+      - "${DB_VM_PRIVATE_IP:?}:6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:?}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:

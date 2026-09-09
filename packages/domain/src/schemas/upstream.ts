@@ -57,24 +57,61 @@ export const historyResponseSchema = z.object({
   baseline_median_volume_20d: numeric.nullable().optional()
 });
 
+/**
+ * VERIFIED against a real payload from https://stock.arjum.com/api/broker-summary/{code}
+ * (2026-09-09, symbol BBCA) -- see packages/domain/src/schemas/README.md. Field
+ * names/shape are Stockbit-broker-summary-derived, not the blueprint's guessed
+ * snake_case contract: `stock_code` (not `symbol`), per-broker totals as
+ * `bval`/`bvol`/`bfrq`/`sval`/`svol`/`sfrq`/`nval`/`nvol` (not
+ * `buy_value`/`buy_volume`/...), and no `status`/`trading_date` field at all --
+ * the endpoint returns a DATE RANGE (`broker_start_date`..`broker_end_date`),
+ * not a single trading day; average buy/sell price per broker must be derived
+ * (bval/bvol, sval/svol), not read from a field.
+ */
 export const brokerRowSchema = z.object({
   broker_code: z.string(),
-  buy_volume: numeric,
-  buy_value: numeric,
-  sell_volume: numeric,
-  sell_value: numeric,
-  net_volume: numeric.optional(),
-  net_value: numeric.optional(),
-  avg_buy_price: numeric.nullable().optional(),
-  avg_sell_price: numeric.nullable().optional()
+  broker_name: z.string().optional(),
+  bval: numeric,
+  bvol: numeric,
+  bfrq: numeric.optional(),
+  sval: numeric,
+  svol: numeric,
+  sfrq: numeric.optional(),
+  nval: numeric.optional(),
+  nvol: numeric.optional()
+});
+
+/** One row of `broker_levels`: the Nth-largest buyer paired with the Nth-largest
+ * seller (by rank, not by counterparty match) -- evidence-only, not consumed by
+ * the feature engine's B-Avg/HHI/breadth math (those use `brokers[]` totals). */
+export const brokerLevelSideSchema = z.object({
+  broker_code: z.string(),
+  broker_name: z.string().optional(),
+  bval: numeric.optional(),
+  bvol: numeric.optional(),
+  bfrq: numeric.optional(),
+  bavg: numeric.optional(),
+  sval: numeric.optional(),
+  svol: numeric.optional(),
+  sfrq: numeric.optional(),
+  savg: numeric.optional()
+});
+
+export const brokerLevelSchema = z.object({
+  buy: brokerLevelSideSchema.optional(),
+  sell: brokerLevelSideSchema.optional()
 });
 
 export const brokerSummaryResponseSchema = z.object({
-  symbol: z.string(),
-  trading_date: z.string(),
-  segment: z.enum(["regular", "cash", "negotiated", "unknown"]).optional().default("unknown"),
-  status: z.enum(["final", "provisional"]).optional().default("provisional"),
-  brokers: z.array(brokerRowSchema)
+  stock_code: z.string(),
+  brokers: z.array(brokerRowSchema),
+  broker_levels: z.array(brokerLevelSchema).optional().default([]),
+  broker_start_date: z.string(),
+  broker_end_date: z.string(),
+  broker_date_min: z.string().optional(),
+  broker_date_max: z.string().optional(),
+  broker_net: z.boolean().optional(),
+  flow: z.string().optional()
 });
 
 export const brokerAccumulationDaySchema = z.object({

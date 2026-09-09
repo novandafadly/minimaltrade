@@ -76,28 +76,34 @@ export function normalizeHistory(resp: HistoryResponse): HistoryData {
 }
 
 function normalizeBrokerRow(row: BrokerSummaryResponse["brokers"][number]): BrokerRow {
-  const buyVolume = Number(row.buy_volume);
-  const sellVolume = Number(row.sell_volume);
-  const buyValue = Number(row.buy_value);
-  const sellValue = Number(row.sell_value);
+  const buyVolume = Number(row.bvol);
+  const sellVolume = Number(row.svol);
+  const buyValue = Number(row.bval);
+  const sellValue = Number(row.sval);
   return {
     brokerCode: row.broker_code,
     buyVolume,
     buyValue,
     sellVolume,
     sellValue,
-    netVolume: row.net_volume !== undefined ? Number(row.net_volume) : buyVolume - sellVolume,
-    netValue: row.net_value !== undefined ? Number(row.net_value) : buyValue - sellValue,
-    avgBuyPrice: row.avg_buy_price !== undefined && row.avg_buy_price !== null ? Number(row.avg_buy_price) : null,
-    avgSellPrice: row.avg_sell_price !== undefined && row.avg_sell_price !== null ? Number(row.avg_sell_price) : null
+    netVolume: row.nvol !== undefined ? Number(row.nvol) : buyVolume - sellVolume,
+    netValue: row.nval !== undefined ? Number(row.nval) : buyValue - sellValue,
+    // Real payload gives no per-broker average price field; derive it from
+    // value/volume (undefined when the broker had zero volume on that side).
+    avgBuyPrice: buyVolume > 0 ? buyValue / buyVolume : null,
+    avgSellPrice: sellVolume > 0 ? sellValue / sellVolume : null
   };
 }
 
 export function normalizeBrokerSummary(resp: BrokerSummaryResponse): BrokerSummaryData {
   const brokers = resp.brokers.map(normalizeBrokerRow);
   return {
-    symbol: resp.symbol,
-    segment: resp.segment ?? "unknown",
+    symbol: resp.stock_code,
+    // The real endpoint has no market-segment field at all; "regular" is the
+    // exchange's default board and is what the deep funnel assumes unless a
+    // future payload sample proves otherwise. This is a documented
+    // assumption, not a verified field -- see schemas/README.md.
+    segment: "regular",
     brokers,
     totalVolume: brokers.reduce((sum, b) => sum + b.buyVolume + b.sellVolume, 0),
     totalValue: brokers.reduce((sum, b) => sum + b.buyValue + b.sellValue, 0)

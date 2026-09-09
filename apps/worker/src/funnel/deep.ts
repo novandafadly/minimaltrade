@@ -107,8 +107,12 @@ export async function runDeepFunnel(
     try {
       const [brokerSummaryEnvelope, brokerAccumulationEnvelope, historyEnvelope, seasonalEnvelope, insidersEnvelope] =
         await Promise.all([
+          // assumeFinal=true: the deep funnel only ever runs after session
+          // close (see index.ts's maybeRunDeepFunnelOnceToday), and the real
+          // broker-summary payload carries no status field of its own to
+          // read finality from -- see getBrokerSummary's doc comment.
           fetchDeep<DataEnvelope<BrokerSummaryData>>(deps, redis, env, "brokerSummary", symbol, () =>
-            getBrokerSummary(deps, symbol)
+            getBrokerSummary(deps, symbol, true)
           ),
           fetchDeep<DataEnvelope<BrokerAccumulationData>>(deps, redis, env, "brokerAccumulation", symbol, () =>
             getBrokerAccumulation(deps, symbol)
