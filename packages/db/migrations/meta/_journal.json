@@ -8,6 +8,13 @@
       "when": 1788924363710,
       "tag": "0000_silent_captain_america",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1788927238437,
+      "tag": "0001_orange_grey_gargoyle",
+      "breakpoints": true
     }
   ]
 }

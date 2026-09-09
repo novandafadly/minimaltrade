@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { and, eq, isNull } from "drizzle-orm";
 import type { Db } from "@idx/db";
 import { schema } from "@idx/db";
-import type { DataEnvelope, ScreenerRow, BrokerSummaryData } from "@idx/domain";
+import type { DataEnvelope, ScreenerRow, BrokerSummaryData, HistoryData } from "@idx/domain";
 import type { FeatureSnapshot, Signal, TradePlan } from "@idx/domain";
 
 /**
@@ -101,6 +101,47 @@ export async function upsertBrokerSnapshot(
           status: envelope.status,
           receivedAt: new Date(envelope.receivedAt),
           rawPayloadId
+        }
+      });
+  }
+}
+
+/**
+ * Persists true OHLCV bars from `/api/history/{code}` into `daily_bar`, one
+ * upsert per bar (a history response typically returns a rolling window, so
+ * re-fetching the same day is expected and must be idempotent). This is what
+ * lets `packages/backtest`'s PostgresDataSource do real gap detection and
+ * same-bar SL/TP resolution instead of degrading to a single EOD price point
+ * (see that package's documented `market_snapshot`-only limitation).
+ */
+export async function upsertDailyBars(db: Db, envelope: DataEnvelope<HistoryData>): Promise<void> {
+  for (const bar of envelope.data.bars) {
+    await db
+      .insert(schema.dailyBar)
+      .values({
+        id: randomUUID(),
+        symbol: envelope.symbol,
+        tradingDate: bar.date,
+        open: String(bar.open),
+        high: String(bar.high),
+        low: String(bar.low),
+        close: String(bar.close),
+        volume: String(bar.volume),
+        turnover: bar.turnover !== null ? String(bar.turnover) : null,
+        source: envelope.source,
+        receivedAt: new Date(envelope.receivedAt)
+      })
+      .onConflictDoUpdate({
+        target: [schema.dailyBar.symbol, schema.dailyBar.tradingDate],
+        set: {
+          open: String(bar.open),
+          high: String(bar.high),
+          low: String(bar.low),
+          close: String(bar.close),
+          volume: String(bar.volume),
+          turnover: bar.turnover !== null ? String(bar.turnover) : null,
+          source: envelope.source,
+          receivedAt: new Date(envelope.receivedAt)
         }
       });
   }

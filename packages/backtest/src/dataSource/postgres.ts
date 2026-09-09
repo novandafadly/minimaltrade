@@ -1,31 +1,26 @@
 import { and, asc, desc, eq, gt, lte } from "drizzle-orm";
 import type { Db } from "@idx/db";
-import { instrument, marketSnapshot, tradePlan as tradePlanTable } from "@idx/db";
+import { dailyBar, instrument, marketSnapshot, tradePlan as tradePlanTable } from "@idx/db";
 import type { DataEnvelope, HistoryData, OhlcvBar, TradePlan } from "@idx/domain";
 import type { LiquidUniverseEntry, ReplayDataSource } from "./types.js";
 
 /**
- * Postgres-backed ReplayDataSource for real historical replay once the live
- * funnel has persisted enough `market_snapshot` history and the signal
- * pipeline has persisted `trade_plan` rows.
+ * Postgres-backed ReplayDataSource for real historical replay.
  *
- * KNOWN SCHEMA LIMITATION (documented, not fixed here -- packages/db/src/
- * schema.ts is read-only for this package per its build instructions):
- * `market_snapshot` stores a single EOD `price` per symbol/day, not a full
- * OHLC bar (no open/high/low columns). This data source maps that one price
- * to open=high=low=close for the day. That is enough to run the replay
- * pipeline end to end, but it silently degrades two things the fill
- * simulator is designed to model precisely:
- *   - gap detection (open vs prior close) never fires, since "open" here IS
- *     the snapshot price, not a real session open;
- *   - same-bar SL/TP ambiguity never arises, since high=low=close collapses
- *     every bar to a single price point.
- * For a real production backtest, either (a) persist true OHLC (add
- * open/high/low columns to market_snapshot, or a dedicated daily_bar table
- * fed from the `/api/history/{code}` endpoint's bars), or (b) source bars
- * from that history endpoint's archived raw_payload_archive rows instead of
- * market_snapshot directly. Flagged in this session's report rather than
- * changed here, per this package's constraints.
+ * Bars are sourced from `daily_bar` (true OHLCV, persisted by
+ * `apps/worker`'s deep funnel from `/api/history/{code}`) when available for
+ * a symbol/date. This is what the fill simulator needs for accurate gap
+ * detection and same-bar SL/TP-priority resolution.
+ *
+ * FALLBACK (documented, intentional): for a symbol/date with no `daily_bar`
+ * row yet -- e.g. a fresh deployment that hasn't run the deep funnel through
+ * a full day, or historical `market_snapshot` rows collected before
+ * `daily_bar` existed -- this source falls back to `market_snapshot`'s
+ * single EOD `price`, collapsed to open=high=low=close for that day. That
+ * silently degrades gap detection (no real session open) and same-bar
+ * SL/TP ambiguity (high=low=close), same as before `daily_bar` existed, but
+ * only for the days lacking real bar data; it keeps the replay pipeline
+ * runnable rather than failing outright on partial history.
  */
 export class PostgresDataSource implements ReplayDataSource {
   constructor(private readonly db: Db) {}
@@ -40,6 +35,35 @@ export class PostgresDataSource implements ReplayDataSource {
 
   async getHistoryAsOf(symbol: string, asOf: string): Promise<DataEnvelope<HistoryData> | null> {
     const asOfDate = asOf.slice(0, 10);
+
+    const barRows = await this.db
+      .select()
+      .from(dailyBar)
+      .where(and(eq(dailyBar.symbol, symbol), lte(dailyBar.tradingDate, asOfDate), lte(dailyBar.receivedAt, new Date(asOf))))
+      .orderBy(asc(dailyBar.tradingDate));
+
+    if (barRows.length > 0) {
+      const bars: OhlcvBar[] = barRows.map(dailyBarRowToBar);
+      const volumes = [...bars.map((b) => b.volume)].sort((a, b) => a - b);
+      const baselineMedianVolume20d = volumes.length > 0 ? (volumes[Math.floor(volumes.length / 2)] ?? null) : null;
+      const last = barRows[barRows.length - 1];
+      if (!last) return null;
+      return {
+        symbol,
+        tradingDate: last.tradingDate,
+        eventTime: null,
+        publishedAt: null,
+        receivedAt: last.receivedAt.toISOString(),
+        source: last.source,
+        segment: "regular",
+        revisionId: null,
+        status: "final",
+        data: { symbol, bars: bars.slice(-20), baselineMedianVolume20d }
+      };
+    }
+
+    // Fallback: no daily_bar rows for this symbol/window yet -- degrade to
+    // market_snapshot's single-price-per-day approximation (see class doc).
     const rows = await this.db
       .select()
       .from(marketSnapshot)
@@ -119,6 +143,14 @@ export class PostgresDataSource implements ReplayDataSource {
   }
 
   async getBarOn(symbol: string, date: string): Promise<OhlcvBar | null> {
+    const barRows = await this.db
+      .select()
+      .from(dailyBar)
+      .where(and(eq(dailyBar.symbol, symbol), eq(dailyBar.tradingDate, date)))
+      .limit(1);
+    const barRow = barRows[0];
+    if (barRow) return dailyBarRowToBar(barRow);
+
     const rows = await this.db
       .select()
       .from(marketSnapshot)
@@ -130,6 +162,14 @@ export class PostgresDataSource implements ReplayDataSource {
   }
 
   async getSimulationBars(symbol: string, afterDate: string, maxBars: number): Promise<OhlcvBar[]> {
+    const barRows = await this.db
+      .select()
+      .from(dailyBar)
+      .where(and(eq(dailyBar.symbol, symbol), gt(dailyBar.tradingDate, afterDate)))
+      .orderBy(asc(dailyBar.tradingDate))
+      .limit(maxBars);
+    if (barRows.length > 0) return barRows.map(dailyBarRowToBar);
+
     const rows = await this.db
       .select()
       .from(marketSnapshot)
@@ -138,6 +178,26 @@ export class PostgresDataSource implements ReplayDataSource {
       .limit(maxBars);
     return rows.map(rowToBar);
   }
+}
+
+function dailyBarRowToBar(row: {
+  tradingDate: string;
+  open: string;
+  high: string;
+  low: string;
+  close: string;
+  volume: string;
+  turnover: string | null;
+}): OhlcvBar {
+  return {
+    date: row.tradingDate,
+    open: Number(row.open),
+    high: Number(row.high),
+    low: Number(row.low),
+    close: Number(row.close),
+    volume: Number(row.volume),
+    turnover: row.turnover !== null ? Number(row.turnover) : null
+  };
 }
 
 function rowToBar(row: { tradingDate: string; price: string; volume: string; turnover: string }): OhlcvBar {

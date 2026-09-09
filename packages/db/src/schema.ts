@@ -75,6 +75,35 @@ export const marketSnapshot = pgTable(
   })
 );
 
+/**
+ * True daily OHLCV bars sourced from `/api/history/{code}` (blueprint §3
+ * "OHLCV dan baseline volume"). Distinct from `market_snapshot`, which is a
+ * point-in-time screener poll (a single price sample per fetch, not a
+ * session's open/high/low) — `daily_bar` is what the backtest/replay engine
+ * (`packages/backtest`) needs for accurate gap detection and same-bar
+ * SL/TP-priority resolution; `market_snapshot` alone silently collapses
+ * every bar to a single price point when used as a replay data source.
+ */
+export const dailyBar = pgTable(
+  "daily_bar",
+  {
+    id: text("id").primaryKey(), // uuid
+    symbol: text("symbol").notNull(),
+    tradingDate: text("trading_date").notNull(), // YYYY-MM-DD
+    open: numeric("open", { precision: 14, scale: 2 }).notNull(),
+    high: numeric("high", { precision: 14, scale: 2 }).notNull(),
+    low: numeric("low", { precision: 14, scale: 2 }).notNull(),
+    close: numeric("close", { precision: 14, scale: 2 }).notNull(),
+    volume: numeric("volume", { precision: 20, scale: 0 }).notNull(),
+    turnover: numeric("turnover", { precision: 20, scale: 2 }),
+    source: text("source").notNull(),
+    receivedAt: timestamp("received_at", { withTimezone: true }).notNull()
+  },
+  (t) => ({
+    symbolDateIdx: uniqueIndex("daily_bar_symbol_date_idx").on(t.symbol, t.tradingDate)
+  })
+);
+
 export const brokerSnapshot = pgTable(
   "broker_snapshot",
   {

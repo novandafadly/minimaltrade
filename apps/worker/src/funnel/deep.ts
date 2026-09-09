@@ -32,7 +32,13 @@ import { CACHE_TTL_SECONDS } from "../cache/ttl.js";
 import type { MidFunnelScored } from "./mid.js";
 import { DEEP_FUNNEL_PRELIMINARY_STOP_PCT } from "./constants.js";
 import { isEnvelopeStale } from "../adapter/envelope.js";
-import { upsertBrokerSnapshot, upsertFeatureSnapshot, insertSignal, insertTradePlan } from "../persist/snapshots.js";
+import {
+  upsertBrokerSnapshot,
+  upsertDailyBars,
+  upsertFeatureSnapshot,
+  insertSignal,
+  insertTradePlan
+} from "../persist/snapshots.js";
 
 /**
  * Deep Funnel (blueprint §4.3): full enrichment for mid-funnel survivors
@@ -121,6 +127,7 @@ export async function runDeepFunnel(
       await fetchDeep(deps, redis, env, "financialStatements", symbol, () => getFinancialStatements(deps, symbol));
 
       await upsertBrokerSnapshot(db, brokerSummaryEnvelope, null);
+      await upsertDailyBars(db, historyEnvelope);
 
       const dataStale =
         isEnvelopeStale(brokerSummaryEnvelope, now) ||
