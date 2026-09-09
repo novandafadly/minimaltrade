@@ -6,7 +6,6 @@ import {
   numeric,
   boolean,
   jsonb,
-  primaryKey,
   index,
   uniqueIndex
 } from "drizzle-orm/pg-core";

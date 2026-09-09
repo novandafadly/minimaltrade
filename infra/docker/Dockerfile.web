@@ -12,7 +12,10 @@ RUN pnpm install --frozen-lockfile
 
 FROM deps AS build
 COPY . .
-RUN pnpm --filter @idx/config --filter @idx/domain --filter @idx/db --filter @idx/web run build
+RUN pnpm --filter @idx/config run build && \
+    pnpm --filter @idx/domain run build && \
+    pnpm --filter @idx/db run build && \
+    pnpm --filter @idx/web run build
 
 FROM base AS runner
 ENV NODE_ENV=production

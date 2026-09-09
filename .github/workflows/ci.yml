@@ -32,6 +32,7 @@ jobs:
           --health-retries 10
     env:
       DATABASE_URL: postgres://idx:idx@localhost:5432/idx_smart_money
+      TEST_DATABASE_URL: postgres://idx:idx@localhost:5432/idx_smart_money_test
       REDIS_URL: redis://localhost:6379
       ARJUM_API_BASE_URL: https://stock.arjum.com
       ARJUM_API_KEY: ci-placeholder-key
@@ -54,8 +55,13 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
-      - name: Run DB migrations
-        run: pnpm db:migrate
+      - name: Create test database
+        run: PGPASSWORD=idx psql -h localhost -U idx -d idx_smart_money -c "CREATE DATABASE idx_smart_money_test;"
+
+      - name: Run DB migrations (main + worker test DB)
+        run: |
+          pnpm db:migrate
+          DATABASE_URL="$TEST_DATABASE_URL" pnpm db:migrate
 
       - name: Lint
         run: pnpm lint
