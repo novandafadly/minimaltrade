@@ -9,12 +9,12 @@ import { loadEnv, buildSessionCalendar, isWithinSession, DEFAULT_STRATEGY_CONFIG
 import { createDbClient, schema } from "@idx/db";
 import { eq } from "drizzle-orm";
 import { createRedisClient } from "./cache/redis.js";
-import { getScreenerLatest, getMarketCap, type AdapterContext } from "./adapter/endpoints.js";
+import { getScreenerLatest, type AdapterContext } from "./adapter/endpoints.js";
 import { getOrFetch } from "./cache/cache.js";
 import { CACHE_TTL_SECONDS } from "./cache/ttl.js";
 import { reserveRequest, recordLedgerEntry } from "./cache/budget.js";
 import { runTopFunnel } from "./funnel/top.js";
-import { runMidFunnel, type MidFunnelCandidateInput } from "./funnel/mid.js";
+import { runMidFunnel } from "./funnel/mid.js";
 import { runDeepFunnel } from "./funnel/deep.js";
 import { computeWorkerHealth, recordScreenerPollSuccess } from "./health.js";
 import { maybePublishCategoryChangeAlert } from "./alerts/index.js";
@@ -113,28 +113,14 @@ async function runTopAndMidFunnel(ctx: AdapterContext & { redis: import("ioredis
     status = cacheHit ? "cache_hit" : "success";
     await recordScreenerPollSuccess(redis);
 
-    const top = runTopFunnel(value.rows, strategyConfig.funnel);
-
-    // Mid funnel needs market-cap + history + accumulation cache for each
-    // top-funnel survivor. market-cap is one whole-universe cached call;
-    // history/accumulation are per-symbol cached calls (cheap: already
-    // covered by the daily TTL, so a repeat tick within the same day is a
-    // cache hit, not a new upstream request).
-    const marketCap = await getOrFetch(redis, "marketCap", "universe", CACHE_TTL_SECONDS.marketCap, () =>
-      getMarketCap(ctx)
-    );
-    const marketCapBySymbol = new Map(marketCap.value.entries.map((e) => [e.symbol, e.data]));
-
-    const midInputs: MidFunnelCandidateInput[] = top.survivors.map((s) => ({
-      screener: s,
-      marketCap: marketCapBySymbol.get(s.symbol) ?? null,
-      history: null, // history/accumulation intentionally omitted from the poll-frequency
-      accumulation: null // mid-funnel pass to stay within budget; deep funnel fetches them.
-    }));
-
-    const mid = runMidFunnel(midInputs, strategyConfig.funnel, strategyConfig.risk);
+    // During the session this is informational only: the screener shortlist
+    // is logged so operators can see the day's candidates forming. The
+    // signal-producing run is the once-daily deep funnel after EOD.
+    const top = runTopFunnel(value.candidates, strategyConfig.funnel);
+    const mid = runMidFunnel(top.survivors, strategyConfig.funnel);
     console.log(
-      `[funnel] top=${top.survivors.length}/${value.rows.length} mid=${mid.length} (excluded reasons: ${JSON.stringify(top.reasons)})`
+      `[funnel] intraday screener: candidates=${value.candidates.length} top=${top.survivors.length} mid=${mid.length}` +
+        ` (excluded: ${JSON.stringify(top.reasons)})`
     );
   } catch (err) {
     status = "error";
@@ -156,7 +142,14 @@ async function maybeRunDeepFunnelOnceToday(
 ) {
   const { redis, env, db } = ctx;
   const now = new Date();
-  const dayBucket = now.toISOString().slice(0, 10);
+  // Bucket by the EXCHANGE-LOCAL date, not UTC — otherwise the once-per-day
+  // guard rolls over at 07:00 WIB instead of at the trading-day boundary.
+  const dayBucket = new Intl.DateTimeFormat("en-CA", {
+    timeZone: env.SESSION_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).format(now);
   const flagKey = `${DEEP_FUNNEL_RUN_FLAG_PREFIX}${dayBucket}`;
 
   const { minutesSinceMidnight, dayOfWeek } = localSessionClock(now, env.SESSION_TIMEZONE);
@@ -176,14 +169,8 @@ async function maybeRunDeepFunnelOnceToday(
     CACHE_TTL_SECONDS.screenerLatest,
     () => getScreenerLatest(ctx)
   );
-  const top = runTopFunnel(screenerResult.rows, strategyConfig.funnel);
-  const midInputs: MidFunnelCandidateInput[] = top.survivors.map((s) => ({
-    screener: s,
-    marketCap: null,
-    history: null,
-    accumulation: null
-  }));
-  const mid = runMidFunnel(midInputs, strategyConfig.funnel, strategyConfig.risk);
+  const top = runTopFunnel(screenerResult.candidates, strategyConfig.funnel);
+  const mid = runMidFunnel(top.survivors, strategyConfig.funnel);
 
   const deepResult = await runDeepFunnel(mid, { env, db, redis, strategyConfig });
 

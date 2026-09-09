@@ -1,22 +1,19 @@
 import { describe, expect, it } from "vitest";
 import { DEFAULT_STRATEGY_CONFIG } from "@idx/config";
-import type { DataEnvelope, ScreenerRow } from "@idx/domain";
+import type { DataEnvelope, ScreenerSignalRow } from "@idx/domain";
 import { runTopFunnel } from "../top.js";
-import { TOP_FUNNEL_MIN_TURNOVER_IDR } from "../constants.js";
 
-function row(overrides: Partial<ScreenerRow> & { symbol: string }): DataEnvelope<ScreenerRow> {
-  const data: ScreenerRow = {
-    board: null,
-    price: 1000,
-    priceChange: 0,
-    priceChangePct: 0,
-    volume: 1000,
-    turnover: TOP_FUNNEL_MIN_TURNOVER_IDR * 2,
-    bestBid: 995,
-    bestOffer: 1000,
-    spread: 5,
-    isSuspended: false,
-    notation: null,
+function row(
+  overrides: Partial<ScreenerSignalRow> & { symbol: string }
+): DataEnvelope<ScreenerSignalRow> {
+  const data: ScreenerSignalRow = {
+    name: null,
+    bucket: "🟢 SINYAL BERSIH",
+    summary: "✅ 🏦 — Gabungan (Broker + Teknikal)",
+    note: null,
+    drawdown: -3,
+    wrEvent: 60,
+    potential: 8,
     ...overrides
   };
   return {
@@ -34,34 +31,31 @@ function row(overrides: Partial<ScreenerRow> & { symbol: string }): DataEnvelope
 }
 
 describe("runTopFunnel", () => {
-  it("excludes suspended, high-risk-notation, provisional, low-turnover and wide-spread rows", () => {
+  it("drops distribution/trap/pump buckets and provisional rows, keeps the rest", () => {
     const rows = [
-      row({ symbol: "SUSP", isSuspended: true }),
-      row({ symbol: "UMA1", notation: ["UMA"] }),
-      row({ symbol: "LOWT", turnover: 1000 }),
-      row({ symbol: "WIDE", price: 1000, bestBid: 900, bestOffer: 1000, spread: 100 }),
-      row({ symbol: "GOOD" })
+      row({ symbol: "CONF", bucket: "⚔️ KONFLIK DISTRIBUSI" }),
+      row({ symbol: "TRAP", bucket: "🟢 SINYAL BERSIH", summary: "🧨 jebakan historis" }),
+      row({ symbol: "PUMP", bucket: "⏰ SINYAL TELAT", summary: "🚀⚠️ pompa" }),
+      row({ symbol: "GOOD1" }),
+      row({ symbol: "GOOD2", bucket: "🥷 SINYAL SENYAP" })
     ];
-    const provisionalRow = { ...row({ symbol: "STAL" }), status: "provisional" as const };
+    const provisional = { ...row({ symbol: "STAL" }), status: "provisional" as const };
 
-    const result = runTopFunnel([...rows, provisionalRow], DEFAULT_STRATEGY_CONFIG.funnel);
-    const survivorSymbols = result.survivors.map((s) => s.symbol);
+    const result = runTopFunnel([...rows, provisional], DEFAULT_STRATEGY_CONFIG.funnel);
+    const survivors = result.survivors.map((s) => s.symbol).sort();
 
-    expect(survivorSymbols).toEqual(["GOOD"]);
-    expect(result.reasons.suspended).toBe(1);
-    expect(result.reasons.high_risk_notation).toBe(1);
-    expect(result.reasons.below_min_turnover).toBe(1);
-    expect(result.reasons.spread_too_wide).toBe(1);
+    expect(survivors).toEqual(["GOOD1", "GOOD2"]);
+    expect(result.reasons.distribution_or_trap_bucket).toBe(3);
     expect(result.reasons.stale_or_provisional).toBe(1);
   });
 
-  it("ranks survivors by turnover descending and caps at topFunnelTargetMax", () => {
+  it("ranks by win-rate x upside and caps at topFunnelTargetMax", () => {
     const rows = Array.from({ length: 200 }, (_, i) =>
-      row({ symbol: `S${i}`, turnover: TOP_FUNNEL_MIN_TURNOVER_IDR * (i + 1) })
+      row({ symbol: `S${i}`, wrEvent: 40 + (i % 40), potential: 1 + (i % 20) })
     );
+    rows.push(row({ symbol: "BEST", wrEvent: 90, potential: 30 }));
     const result = runTopFunnel(rows, DEFAULT_STRATEGY_CONFIG.funnel);
     expect(result.survivors.length).toBeLessThanOrEqual(DEFAULT_STRATEGY_CONFIG.funnel.topFunnelTargetMax);
-    // highest turnover first
-    expect(result.survivors[0]?.symbol).toBe("S199");
+    expect(result.survivors[0]?.symbol).toBe("BEST");
   });
 });
