@@ -17,6 +17,7 @@ Monorepo (pnpm workspaces):
 - `packages/db` — Postgres schema (Drizzle ORM) + migrations + seed.
 - `apps/worker` — market data adapter, Redis cache/single-flight/rate-budget/request-ledger, funnel (top/mid/deep), scheduler, alert engine.
 - `apps/web` — Next.js dashboard + BFF route handlers + SSE.
+- `packages/backtest` — replay/backtest engine: no-future-leakage data sourcing, limit/partial/gap fill simulation, metrics, baseline comparisons.
 - `infra/docker` — Dockerfiles, local dev `docker-compose.yml`, production `docker-compose.prod.yml`.
 
 ## Prerequisites
@@ -93,8 +94,30 @@ and applies migrations on every push to `main`.
 ## Backtest / replay
 
 See `docs/AUDIT_AND_PLAN.md` §7 phase 6. Replay only uses data available as of
-each historical decision timestamp (no future leakage) and simulates limit
-fill, partial fill, gap, fee, and slippage per the blueprint's §13.2.
+each historical decision timestamp (no future leakage, enforced by a
+`withLeakGuard` wrapper around the data source) and simulates limit fill,
+partial fill, gap, fee, and slippage per the blueprint's §13.2.
+
+```bash
+# Deterministic synthetic dataset (no DB needed) — sanity-checks the pipeline
+pnpm --filter @idx/backtest run replay -- --source=fixture
+
+# Real historical data (requires daily_bar/trade_plan rows persisted by the
+# worker's deep funnel over enough trading days)
+pnpm --filter @idx/backtest run replay -- --source=postgres
+```
+
+Prints a JSON metrics report (net expectancy, profit factor, max drawdown,
+avg net RR, fill rate, false-accumulation rate, rule adherence) and compares
+against the "random liquid universe" and "volume-only ranking" baselines the
+blueprint names in §13.2/§14.
+
+True OHLCV bars (needed for accurate gap/same-bar SL-TP simulation) come from
+the `daily_bar` table, populated by the worker's deep funnel from
+`/api/history/{code}`. Until enough days of `daily_bar` history exist for a
+symbol, the Postgres replay source falls back to `market_snapshot`'s single
+EOD price (open=high=low=close for that day) — see
+`packages/backtest/src/dataSource/postgres.ts` for the documented tradeoff.
 
 ## Non-goals (V1)
 

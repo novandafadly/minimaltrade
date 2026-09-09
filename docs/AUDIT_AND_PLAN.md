@@ -49,8 +49,11 @@ external domains — only npm/GitHub/Anthropic are reachable). Real sample paylo
 
 Tables map 1:1 to blueprint §9.2 entities: `instrument`, `market_snapshot`, `broker_snapshot`,
 `feature_snapshot`, `signal`, `trade_plan`, `paper_trade`, `strategy_config`, `request_ledger`,
-plus `raw_payload_archive` (audit/replay), `alert_log` (dedupe/cooldown), and
-`session_calendar` (IDX trading calendar). All snapshot/signal tables carry `formula_version`,
+plus `raw_payload_archive` (audit/replay), `alert_log` (dedupe/cooldown),
+`session_calendar` (IDX trading calendar), and `daily_bar` (true OHLCV from
+`/api/history/{code}`, added during Phase 6 integration so the replay engine can do
+accurate gap/same-bar SL-TP simulation instead of collapsing each day to `market_snapshot`'s
+single EOD price). All snapshot/signal tables carry `formula_version`,
 `config_version`, `input_snapshot_id` for reproducibility (Acceptance Criteria V1).
 
 ## 6. Environment Variables
@@ -70,8 +73,12 @@ secret for dashboard auth, `SSE_*`.
 4. Risk Engine — lot sizing, fees, slippage, TP/SL, expiry, NO TRADE. Property tests for
    invariants (lots ≥ 0, TP lots sum = buy lots, loss ≤ risk budget except gap).
 5. Dashboard — trigger table, drawer, plan panel, SSE, stale/degraded/error states.
-6. Replay/Backtest — deterministic replay engine, no future leakage, fill/partial/gap/fee sim.
-7. Paper trading journal + audit trail.
+6. Replay/Backtest (`packages/backtest`) — deterministic replay engine (leak-guarded data
+   source, limit/partial/gap fill simulation, fee/slippage from the same strategy config as
+   the live risk engine), metrics, and baseline comparisons ("random liquid universe",
+   "volume-only ranking") per §13.2/§14. Status: implemented.
+7. Paper trading journal + audit trail (`apps/web/app/api/journal/*`) — implemented as part
+   of the dashboard.
 8. CI/CD — GitHub Actions: lint/typecheck/test/build on PR; build+push Docker images and deploy
    over SSH to a VPS on merge to main (deploy step gated on secrets being present).
 
