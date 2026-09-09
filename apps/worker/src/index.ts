@@ -1,3 +1,10 @@
+// Loads the repo-root .env into process.env for local dev (`pnpm dev:worker`).
+// Production doesn't need this: Docker Compose's `env_file:` injects real
+// container env vars directly, before Node ever starts. A missing .env here
+// (e.g. in CI, which sets real env vars itself) is silently a no-op.
+import { config as loadDotenv } from "dotenv";
+loadDotenv({ path: new URL("../../../.env", import.meta.url).pathname });
+
 import { loadEnv, buildSessionCalendar, isWithinSession, DEFAULT_STRATEGY_CONFIG } from "@idx/config";
 import { createDbClient, schema } from "@idx/db";
 import { eq } from "drizzle-orm";

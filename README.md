@@ -18,7 +18,7 @@ Monorepo (pnpm workspaces):
 - `apps/worker` — market data adapter, Redis cache/single-flight/rate-budget/request-ledger, funnel (top/mid/deep), scheduler, alert engine.
 - `apps/web` — Next.js dashboard + BFF route handlers + SSE.
 - `packages/backtest` — replay/backtest engine: no-future-leakage data sourcing, limit/partial/gap fill simulation, metrics, baseline comparisons.
-- `infra/docker` — Dockerfiles, local dev `docker-compose.yml`, production `docker-compose.prod.yml`.
+- `infra/docker` — Dockerfiles, local dev `docker-compose.yml`, and the two-VM production split: `docker-compose.db.yml` (Postgres + Redis) and `docker-compose.app.yml` (worker + web).
 
 ## Prerequisites
 
@@ -62,34 +62,108 @@ tests use recorded/fixture HTTP responses (`nock`), not the live upstream.
 
 ## Environment variables
 
-See `.env.example` for the full list and inline documentation. Secrets
-(`ARJUM_API_KEY`, `WEB_APP_SESSION_SECRET`, `OBJECT_STORAGE_*`,
-`DEPLOY_SSH_KEY`) must never be committed; production values are injected via
-the deploy server's `.env` (see below) and GitHub Actions repository secrets.
+See `.env.example` (app VM / local dev) and `infra/docker/.env.db.example`
+(DB VM) for the full list and inline documentation. Secrets (`ARJUM_API_KEY`,
+`WEB_APP_SESSION_SECRET`, `OBJECT_STORAGE_*`, `POSTGRES_PASSWORD`,
+`REDIS_PASSWORD`, the deploy SSH key) must never be committed; production
+values are injected via each VM's own `.env` and GitHub Actions repository
+secrets.
 
-## CI/CD
+## Deployment: two OCI VMs
 
-`.github/workflows/ci.yml`:
+The system splits across two VMs, matching how OCI compute is normally
+provisioned for this kind of app:
 
-- On every push/PR: install, migrate against ephemeral Postgres/Redis service
-  containers, lint, typecheck, test, build.
-- On push to `main`, after the above passes: builds worker/web Docker images
-  and deploys over SSH to `DEPLOY_HOST`, provided the following **GitHub
-  repository secrets** are set (deploy step no-ops with a notice if they are
-  not): `DEPLOY_HOST`, `DEPLOY_USER`, `DEPLOY_SSH_KEY`, `DEPLOY_PATH`.
+| VM | Runs | Exposure |
+|---|---|---|
+| **DB VM** | Postgres 16 + Redis 7 (both persisted, `docker-compose.db.yml`) | Private network only — never the public internet |
+| **App VM** | worker + web (`docker-compose.app.yml`) | Public port 3000/80/443 for the dashboard; egress to `stock.arjum.com` and to the DB VM's private IP |
 
-### Server-side one-time setup
+CI/CD (`.github/workflows/ci.yml`) only ever redeploys the **app VM**
+automatically, on every push to `main`. The DB VM is provisioned once by hand
+below and left alone — reapplying a stateful database compose file on every
+push is how you lose data, not something a pipeline should do unattended.
+Schema migrations *are* run automatically on every app-VM deploy (they're
+versioned and additive, and already passed in CI before deploy runs).
 
-On the target VPS:
+### 1. Network setup (OCI console)
+
+Put both VMs in the same VCN, ideally the same subnet, so they reach each
+other over private IPs. On the **DB VM's** Security List / Network Security
+Group, allow ingress on `5432` and `6379` **only from the app VM's private
+IP** (a `/32` rule, not the whole subnet). On the **app VM's**, allow ingress
+on whatever port serves the dashboard (`3000`, or `80`/`443` if you put a
+reverse proxy in front) from the internet, and allow all egress.
+
+### 2. DB VM one-time setup
 
 ```bash
-mkdir -p /opt/idx-smart-money && cd /opt/idx-smart-money
-git clone <this repo> .
-cp .env.example infra/docker/.env   # fill in real secrets, plus POSTGRES_PASSWORD
+# Docker, if not already installed (Ubuntu shown; use dnf on Oracle Linux)
+curl -fsSL https://get.docker.com | sh
+
+git clone https://github.com/novandafadly/cuantrade.git /opt/idx-smart-money
+cd /opt/idx-smart-money/infra/docker
+cp .env.db.example .env
+# edit .env: set DB_VM_PRIVATE_IP to this VM's actual private IP,
+# and generate real POSTGRES_PASSWORD / REDIS_PASSWORD values
+
+docker compose -f docker-compose.db.yml up -d
 ```
 
-The deploy job then runs `docker compose -f infra/docker/docker-compose.prod.yml up -d --build`
-and applies migrations on every push to `main`.
+Note the private IP and the two passwords — you'll need them for the app
+VM's `.env` next.
+
+### 3. App VM one-time setup
+
+```bash
+curl -fsSL https://get.docker.com | sh
+
+mkdir -p /opt/idx-smart-money && cd /opt/idx-smart-money
+git clone https://github.com/novandafadly/cuantrade.git .
+cp .env.example infra/docker/.env
+```
+
+Docker Compose resolves `.env`/`env_file` relative to the compose file's own
+directory (`infra/docker`), not wherever you happen to run the command from
+-- so `.env` must live at `infra/docker/.env` here, same as the DB VM.
+
+Edit `infra/docker/.env` and set, at minimum:
+
+```bash
+ARJUM_API_KEY=<your real key>
+DATABASE_URL=postgres://idx:<POSTGRES_PASSWORD>@<DB_VM_PRIVATE_IP>:5432/idx_smart_money
+REDIS_URL=redis://:<REDIS_PASSWORD>@<DB_VM_PRIVATE_IP>:6379
+WEB_APP_SESSION_SECRET=<a real random 32+ byte secret>
+# OBJECT_STORAGE_* -> point at an OCI Object Storage bucket's S3-compatible
+# endpoint + a Customer Secret Key, not a self-hosted MinIO (see .env.example)
+```
+
+Then bring it up once by hand to confirm it works before CI takes over:
+
+```bash
+docker compose -f infra/docker/docker-compose.app.yml up -d --build
+docker compose -f infra/docker/docker-compose.app.yml exec -T worker pnpm --filter @idx/db run migrate
+docker compose -f infra/docker/docker-compose.app.yml exec -T worker pnpm --filter @idx/db run seed
+```
+
+Dashboard should now be reachable at `http://<app-vm-public-ip>:3000`.
+
+### 4. Wire up GitHub Actions
+
+Repo → **Settings → Secrets and variables → Actions → New repository
+secret**, add:
+
+- `DEPLOY_APP_HOST` — app VM's public IP/hostname
+- `DEPLOY_APP_USER` — SSH user on the app VM
+- `DEPLOY_APP_SSH_KEY` — a private key (paste the key file content) whose
+  matching public key is in that user's `~/.ssh/authorized_keys` on the app
+  VM
+- `DEPLOY_APP_PATH` — `/opt/idx-smart-money` (or wherever you cloned it)
+
+From then on, every push to `main` that passes lint/typecheck/test/build
+automatically SSHes into the app VM, pulls, rebuilds the worker/web
+containers, and runs migrations. The DB VM is untouched by this — go back to
+step 2 manually for Postgres/Redis version bumps or maintenance.
 
 ## Backtest / replay
 
