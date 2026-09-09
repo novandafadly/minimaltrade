@@ -7,42 +7,31 @@
  */
 
 // --- Top funnel (blueprint §4.1) ---------------------------------------
-/** Minimum turnover (Rupiah) for a symbol to be liquid enough to consider.
- * Screener-only data has no multi-day history, so this approximates the
- * blueprint's "minimum median turnover" with a single-day floor. */
-export const TOP_FUNNEL_MIN_TURNOVER_IDR = 500_000_000; // Rp 500 juta
-/** Maximum bid/offer spread as a fraction of price, when spread is available. */
-export const TOP_FUNNEL_MAX_SPREAD_PCT = 0.03;
-/** Reject prices at or below this (gocap/junk-price noise). */
-export const TOP_FUNNEL_MIN_PRICE = 51;
-/** Special-notation codes treated as high-risk and excluded outright.
- * "UMA" (Unusual Market Activity) is the blueprint's explicit example. */
-export const HIGH_RISK_NOTATIONS = new Set([
-  "UMA",
-  "SUSPEND",
-  "ML", // margin/short-selling restriction notations vary by source; treated conservatively
-  "AM", // "Ada Marabahaya"-style Additional Monitoring notations
-  "WATCHLIST_BEI"
-]);
+/** `stock.arjum.com/api/screener/latest` buckets each pick by verdict. Rows
+ * whose bucket or summary contains any of these markers are the upstream's
+ * own distribution / pump / trap warnings and are dropped before ranking.
+ * Matched case-insensitively as substrings. */
+export const TOP_FUNNEL_EXCLUDED_BUCKET_MARKERS = [
+  "konflik distribusi",
+  "distribusi",
+  "🧨", // jebakan historis (historical trap)
+  "🚀⚠️", // pompa (pump)
+  "🔥" // klimaks (climax)
+];
+
+/** Minimum turnover (Rupiah) for a symbol to be liquid enough to consider,
+ * applied in the deep funnel once the per-symbol history quote is available
+ * (the screener shortlist carries no volume/turnover). */
+export const DEEP_FUNNEL_MIN_TURNOVER_IDR = 500_000_000; // Rp 500 juta
+/** Reject prices at or below this (gocap/junk-price noise), deep funnel. */
+export const DEEP_FUNNEL_MIN_PRICE = 51;
 
 // --- Mid funnel (blueprint §4.2) ----------------------------------------
-export const MID_FUNNEL_WEIGHTS = {
-  liquidity: 0.5,
-  gain: 0.2,
-  chasePenalty: 0.15,
-  distributionPenalty: 0.15
-} as const;
-/** "Volume big but negative price response" distribution penalty trigger:
- * today's volume vs the 20d baseline (cheap, from the cached history call). */
-export const MID_FUNNEL_DISTRIBUTION_VOLUME_SPIKE_RATIO = 1.5;
-/** distribution penalty only applies when price response is non-positive. */
-export const MID_FUNNEL_DISTRIBUTION_WEAK_PRICE_PCT_MAX = 0;
-/** Chase-penalty proxy: mid funnel has no broker-summary (that's a deep-
- * funnel call), so "too far above B-Avg" is approximated as "too far above
- * the recent (5-session) average close" from the cheap cached history call.
- * This is intentionally a coarse proxy — the deep funnel applies the real
- * B-Avg-based chase gate once broker-summary is available. */
-export const MID_FUNNEL_CHASE_LOOKBACK_DAYS = 5;
+// The real screener shortlist is already small and pre-ranked; the mid
+// funnel is a bounded re-rank by the upstream's historical edge stats
+// (see funnel/mid.ts). No price/volume proxies here — the deep funnel does
+// the real liquidity/chase/distribution gating once history + broker data
+// are fetched.
 
 // --- Deep funnel (blueprint §4.3) ---------------------------------------
 /** Preliminary stop-loss distance used only to seed the scoring engine's

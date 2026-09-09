@@ -1,73 +1,72 @@
 import { z } from "zod";
 
 /**
- * Zod schemas for the 11 upstream endpoints (blueprint section 3 / prompt
- * section 15), source: https://stock.arjum.com, auth via X-API-Key header.
+ * Zod schemas for the 11 upstream endpoints of https://stock.arjum.com
+ * (auth: `X-API-Key` header).
  *
- * STATUS: PROVISIONAL for every schema below except where a live sample was
- * supplied and verified (see packages/domain/src/schemas/README.md, updated
- * as real payloads arrive). Field names/casing are best-effort guesses from
- * the blueprint's prose contract (symbol, event time/trading date,
- * published_at, received_at, source, market segment, revision id,
- * final/provisional status) and are deliberately permissive (`.passthrough()`
- * is NOT used — unknown extra fields are fine, but every field we depend on
- * downstream is required so a mismatch fails fast at the adapter boundary
- * instead of silently producing NaN/undefined deep in scoring).
- *
- * When tightening a schema against a real payload, change only that schema
- * (single source of truth) and update its status comment.
+ * STATUS: every schema below was tightened against a real captured payload on
+ * 2026-09-09 (BBCA where a symbol is required) — see
+ * packages/domain/src/schemas/README.md. Schemas are deliberately permissive
+ * on fields the pipeline does not consume (unknown extra keys are ignored and
+ * rarely-present keys are `.optional()`), while every field the
+ * funnel/feature/scoring engines depend on is required so a real contract
+ * drift fails fast at the adapter boundary.
  */
 
 const numeric = z.union([z.number(), z.string().transform((s) => Number(s))]);
+const nullableNumeric = numeric.nullable().optional();
 
-export const screenerRowSchema = z.object({
-  symbol: z.string(),
-  board: z.string().nullable().optional(),
-  price: numeric,
-  change: numeric.optional(),
-  change_pct: numeric.optional(),
-  volume: numeric,
-  turnover: numeric,
-  best_bid: numeric.nullable().optional(),
-  best_offer: numeric.nullable().optional(),
-  is_suspended: z.boolean().optional().default(false),
-  notation: z.array(z.string()).nullable().optional()
+// ---------------------------------------------------------------------
+// /api/screener/latest  — curated signal shortlist (NOT a universe)
+// ---------------------------------------------------------------------
+export const screenerSignalRowSchema = z.object({
+  stock_code: z.string(),
+  stock_name: z.string().nullable().optional(),
+  bucket: z.string().nullable().optional(),
+  summary: z.string().nullable().optional(),
+  note: z.string().nullable().optional(),
+  drawdown: nullableNumeric,
+  wr_event: nullableNumeric,
+  potential: nullableNumeric
 });
 
 export const screenerLatestResponseSchema = z.object({
-  as_of: z.string(), // required per blueprint contract; adapter rejects payloads missing this
-  trading_date: z.string().optional(),
-  status: z.enum(["final", "provisional"]).optional().default("provisional"),
-  data: z.array(screenerRowSchema)
+  date: z.string().optional(),
+  source: z.string().optional(),
+  cached_for_seconds: z.number().optional(),
+  raw: z.string().optional(),
+  rows: z.array(screenerSignalRowSchema)
 });
 
-export const ohlcvBarSchema = z.object({
+// ---------------------------------------------------------------------
+// /api/history/{code}  — daily candlestick + volume (full OHLCV)
+// ---------------------------------------------------------------------
+export const historyRowSchema = z.object({
   date: z.string(),
   open: numeric,
   high: numeric,
   low: numeric,
   close: numeric,
   volume: numeric,
-  turnover: numeric.nullable().optional()
+  value: nullableNumeric, // rupiah turnover
+  change: nullableNumeric,
+  change_pct: nullableNumeric,
+  freq: nullableNumeric,
+  f_buy: nullableNumeric,
+  f_sell: nullableNumeric,
+  n_foreign: nullableNumeric,
+  avg: nullableNumeric
 });
 
 export const historyResponseSchema = z.object({
-  symbol: z.string(),
-  bars: z.array(ohlcvBarSchema),
-  baseline_median_volume_20d: numeric.nullable().optional()
+  stock_code: z.string(),
+  frame: z.string().optional(),
+  rows: z.array(historyRowSchema)
 });
 
-/**
- * VERIFIED against a real payload from https://stock.arjum.com/api/broker-summary/{code}
- * (2026-09-09, symbol BBCA) -- see packages/domain/src/schemas/README.md. Field
- * names/shape are Stockbit-broker-summary-derived, not the blueprint's guessed
- * snake_case contract: `stock_code` (not `symbol`), per-broker totals as
- * `bval`/`bvol`/`bfrq`/`sval`/`svol`/`sfrq`/`nval`/`nvol` (not
- * `buy_value`/`buy_volume`/...), and no `status`/`trading_date` field at all --
- * the endpoint returns a DATE RANGE (`broker_start_date`..`broker_end_date`),
- * not a single trading day; average buy/sell price per broker must be derived
- * (bval/bvol, sval/svol), not read from a field.
- */
+// ---------------------------------------------------------------------
+// /api/broker-summary/{code}  — VERIFIED 2026-09-09, unchanged shape
+// ---------------------------------------------------------------------
 export const brokerRowSchema = z.object({
   broker_code: z.string(),
   broker_name: z.string().optional(),
@@ -81,9 +80,6 @@ export const brokerRowSchema = z.object({
   nvol: numeric.optional()
 });
 
-/** One row of `broker_levels`: the Nth-largest buyer paired with the Nth-largest
- * seller (by rank, not by counterparty match) -- evidence-only, not consumed by
- * the feature engine's B-Avg/HHI/breadth math (those use `brokers[]` totals). */
 export const brokerLevelSideSchema = z.object({
   broker_code: z.string(),
   broker_name: z.string().optional(),
@@ -114,74 +110,144 @@ export const brokerSummaryResponseSchema = z.object({
   flow: z.string().optional()
 });
 
-export const brokerAccumulationDaySchema = z.object({
+// ---------------------------------------------------------------------
+// /api/broker-accumulation/{code}  — per-broker net-flow time series
+// ---------------------------------------------------------------------
+export const brokerAccumulationPointSchema = z.object({
   date: z.string(),
-  net_buy_brokers: z.array(z.string()),
-  top_buyer_code: z.string().nullable().optional(),
-  top_buyer_share: numeric.nullable().optional()
+  nval: numeric,
+  nvol: nullableNumeric,
+  cum_nval: nullableNumeric,
+  bavg: nullableNumeric,
+  savg: nullableNumeric
+});
+
+export const brokerAccumulationSeriesSchema = z.object({
+  broker_code: z.string(),
+  broker_name: z.string().optional(),
+  points: z.array(brokerAccumulationPointSchema)
+});
+
+export const brokerAccumulationTotalSchema = z.object({
+  broker_code: z.string(),
+  broker_name: z.string().optional(),
+  total_nval: numeric
 });
 
 export const brokerAccumulationResponseSchema = z.object({
-  symbol: z.string(),
-  window_days: z.number().int().optional().default(5),
-  days: z.array(brokerAccumulationDaySchema)
+  code: z.string(),
+  start_date: z.string().optional(),
+  end_date: z.string().optional(),
+  series: z.array(brokerAccumulationSeriesSchema),
+  top_buyers: z.array(brokerAccumulationTotalSchema).optional().default([]),
+  top_sellers: z.array(brokerAccumulationTotalSchema).optional().default([])
 });
 
+// ---------------------------------------------------------------------
+// /api/analysis/{code}  — human-readable markdown blob
+// ---------------------------------------------------------------------
 export const analysisResponseSchema = z.object({
-  symbol: z.string(),
-  sector: z.string().nullable().optional(),
-  market_cap: numeric.nullable().optional(),
-  as_of: z.string().optional()
+  stock_code: z.string(),
+  output: z.string()
+});
+
+// ---------------------------------------------------------------------
+// /api/seasonal/{code}  — monthly seasonality win-rate matrix
+// ---------------------------------------------------------------------
+export const seasonalSummaryEntrySchema = z.object({
+  avg: nullableNumeric,
+  up: z.number().optional(),
+  down: z.number().optional(),
+  total: z.number().optional(),
+  up_prob: nullableNumeric
 });
 
 export const seasonalResponseSchema = z.object({
-  symbol: z.string(),
-  month: z.number().int(),
-  historical_win_rate: numeric.nullable().optional(),
-  sample_size: z.number().int().optional().default(0)
+  stock_code: z.string(),
+  years: z.array(z.string()).optional(),
+  monthly_returns: z.record(z.string(), z.record(z.string(), numeric)).optional(),
+  summary: z.record(z.string(), seasonalSummaryEntrySchema),
+  yearly_avg: z.record(z.string(), numeric).optional()
 });
 
+// ---------------------------------------------------------------------
+// /api/market-cap  — paginated whole-universe market cap
+// ---------------------------------------------------------------------
 export const marketCapEntrySchema = z.object({
-  symbol: z.string(),
-  shares_outstanding: numeric,
+  code: z.string(),
+  name: z.string().optional(),
+  close: nullableNumeric,
+  listed_shares: numeric,
   market_cap: numeric
 });
 
 export const marketCapResponseSchema = z.object({
-  as_of: z.string().optional(),
+  date: z.string().optional(),
+  total: z.number().optional(),
+  page: z.number().optional(),
+  per_page: z.number().optional(),
+  total_pages: z.number().optional(),
   data: z.array(marketCapEntrySchema)
 });
 
-export const searchResponseSchema = z.object({
-  data: z.array(z.object({ symbol: z.string(), name: z.string() }))
-});
+// ---------------------------------------------------------------------
+// /api/search  — bare array (autocomplete)
+// ---------------------------------------------------------------------
+export const searchResponseSchema = z.array(
+  z.object({
+    stock_code: z.string(),
+    stock_name: z.string(),
+    last_date: z.string().optional()
+  })
+);
 
+// ---------------------------------------------------------------------
+// /api/health
+// ---------------------------------------------------------------------
 export const healthResponseSchema = z.object({
+  ok: z.boolean().optional(),
   status: z.string(),
-  latency_ms: numeric.nullable().optional(),
+  latency_ms: nullableNumeric,
   message: z.string().nullable().optional()
 });
 
+// ---------------------------------------------------------------------
+// /api/financial-statements/{code}  — NOT available to API keys (403);
+// schema kept permissive so a future grant does not require a code change.
+// ---------------------------------------------------------------------
 export const financialStatementResponseSchema = z.object({
-  symbol: z.string(),
-  fiscal_period: z.string(),
-  revenue: numeric.nullable().optional(),
-  net_income: numeric.nullable().optional(),
-  debt_to_equity: numeric.nullable().optional(),
+  stock_code: z.string().optional(),
+  symbol: z.string().optional(),
+  fiscal_period: z.string().optional(),
+  revenue: nullableNumeric,
+  net_income: nullableNumeric,
+  debt_to_equity: nullableNumeric,
   red_flags: z.array(z.string()).optional().default([])
 });
 
-export const insiderTransactionSchema = z.object({
-  symbol: z.string(),
+// ---------------------------------------------------------------------
+// /api/insiders/{code}  — paginated insider transactions
+// ---------------------------------------------------------------------
+export const insiderItemSchema = z.object({
+  name: z.string().nullable().optional(),
   date: z.string(),
-  insider_name: z.string().nullable().optional(),
-  action: z.enum(["buy", "sell"]),
-  shares: numeric
+  action_type: z.string(),
+  nationality: z.string().optional(),
+  changes_value: z.string().nullable().optional(),
+  current_value: z.string().nullable().optional(),
+  price_formatted: z.string().nullable().optional(),
+  broker_code: z.string().nullable().optional(),
+  badges: z.array(z.string()).optional()
 });
 
 export const insidersResponseSchema = z.object({
-  symbol: z.string(),
-  data: z.array(insiderTransactionSchema)
+  stock_code: z.string(),
+  count: z.number().optional(),
+  total: z.number().optional(),
+  page: z.number().optional(),
+  page_size: z.number().optional(),
+  total_pages: z.number().optional(),
+  items: z.array(insiderItemSchema)
 });
 
 export type ScreenerLatestResponse = z.infer<typeof screenerLatestResponseSchema>;

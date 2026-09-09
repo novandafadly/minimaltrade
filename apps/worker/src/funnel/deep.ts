@@ -25,33 +25,35 @@ import {
   getSeasonal,
   getInsiders,
   getFinancialStatements,
-  getHistory
+  getHistory,
+  quoteEnvelopeFromHistory
 } from "../adapter/endpoints.js";
 import { getOrFetch } from "../cache/cache.js";
 import { CACHE_TTL_SECONDS } from "../cache/ttl.js";
 import type { MidFunnelScored } from "./mid.js";
-import { DEEP_FUNNEL_PRELIMINARY_STOP_PCT } from "./constants.js";
+import { DEEP_FUNNEL_PRELIMINARY_STOP_PCT, DEEP_FUNNEL_MIN_PRICE, DEEP_FUNNEL_MIN_TURNOVER_IDR } from "./constants.js";
 import { isEnvelopeStale } from "../adapter/envelope.js";
 import {
   upsertBrokerSnapshot,
   upsertDailyBars,
   upsertFeatureSnapshot,
   insertSignal,
-  insertTradePlan
+  insertTradePlan,
+  insertMarketSnapshotIdempotent
 } from "../persist/snapshots.js";
 
 /**
  * Deep Funnel (blueprint §4.3): full enrichment for mid-funnel survivors
- * only (<=20-30 symbols), run once after EOD final data is available. Calls
- * broker-summary, broker-accumulation, analysis, seasonal, insiders and
- * financial-statements through the standard cache (so a symbol already
- * enriched today is not re-fetched). Ranks by composite score; the top
- * `deepFunnelWatchlistMin..Max` become the active watchlist, and only the
- * top `deepFunnelTradePlanMax` of those get a full risk plan.
+ * only, run once after EOD. For each candidate it fetches `/api/history`
+ * (OHLCV -> the per-symbol quote the feature engine needs), broker-summary,
+ * broker-accumulation, seasonal and insiders, then runs the pure
+ * feature/scoring/risk engines. analysis + financial-statements are
+ * best-effort enrichment (financial-statements is 403 for API keys) and
+ * never block a candidate.
  *
- * IMPORTANT: this is the only place in the worker that calls
- * computeFeatureSnapshot/scoreCandidate/buildRiskPlan/assembleSignal — all
- * quant math lives in @idx/domain, this module only orchestrates I/O.
+ * IMPORTANT: this module only orchestrates I/O — all quant math lives in
+ * @idx/domain (computeFeatureSnapshot / scoreCandidate / buildRiskPlan /
+ * assembleSignal), unchanged.
  */
 
 export interface DeepFunnelDeps extends AdapterContext {
@@ -62,8 +64,6 @@ export interface DeepFunnelDeps extends AdapterContext {
   now?: string;
   userOpenRiskPct?: number;
   hasUnreviewedNewsFor?: (symbol: string) => boolean;
-  /** ISO timestamp for "end of current session"; passed in by the scheduler
-   * (which has session-calendar access) rather than guessed here. */
   sessionEndIso?: string;
 }
 
@@ -84,7 +84,14 @@ async function fetchDeep<T>(
   ctx: AdapterContext,
   redis: Redis,
   env: Env,
-  endpoint: "brokerSummary" | "brokerAccumulation" | "analysis" | "seasonal" | "insiders" | "financialStatements" | "history",
+  endpoint:
+    | "brokerSummary"
+    | "brokerAccumulation"
+    | "analysis"
+    | "seasonal"
+    | "insiders"
+    | "financialStatements"
+    | "history",
   symbol: string,
   fetcher: () => Promise<T>
 ): Promise<T> {
@@ -99,50 +106,62 @@ export async function runDeepFunnel(
   const { redis, env, db, strategyConfig } = deps;
   const now = deps.now ?? new Date().toISOString();
   const skipped: { symbol: string; reason: string }[] = [];
-  const enriched: { symbol: string; screener: ScreenerRow; envelope: DataEnvelope<ScreenerRow>; feature: FeatureSnapshot }[] =
-    [];
+  const enriched: { symbol: string; quote: ScreenerRow; feature: FeatureSnapshot }[] = [];
 
   for (const candidate of midFunnelSurvivors) {
     const symbol = candidate.symbol;
     try {
-      const [brokerSummaryEnvelope, brokerAccumulationEnvelope, historyEnvelope, seasonalEnvelope, insidersEnvelope] =
-        await Promise.all([
-          // assumeFinal=true: the deep funnel only ever runs after session
-          // close (see index.ts's maybeRunDeepFunnelOnceToday), and the real
-          // broker-summary payload carries no status field of its own to
-          // read finality from -- see getBrokerSummary's doc comment.
-          fetchDeep<DataEnvelope<BrokerSummaryData>>(deps, redis, env, "brokerSummary", symbol, () =>
-            getBrokerSummary(deps, symbol, true)
-          ),
-          fetchDeep<DataEnvelope<BrokerAccumulationData>>(deps, redis, env, "brokerAccumulation", symbol, () =>
-            getBrokerAccumulation(deps, symbol)
-          ),
-          fetchDeep<DataEnvelope<HistoryData>>(deps, redis, env, "history", symbol, () => getHistory(deps, symbol)),
-          fetchDeep<DataEnvelope<SeasonalData>>(deps, redis, env, "seasonal", symbol, () => getSeasonal(deps, symbol)),
-          fetchDeep<DataEnvelope<InsiderTransaction[]>>(deps, redis, env, "insiders", symbol, () =>
-            getInsiders(deps, symbol)
-          )
-        ]);
+      const historyEnvelope = await fetchDeep<DataEnvelope<HistoryData>>(deps, redis, env, "history", symbol, () =>
+        getHistory(deps, symbol)
+      );
+      const quoteEnvelope = quoteEnvelopeFromHistory(historyEnvelope);
+      const quote = quoteEnvelope.data;
 
-      // analysis + financial-statements are enrichment-only (not required by
-      // FeatureEngineInput) but still fetched here (cached) so deep-funnel
-      // symbols have them available for the dashboard/watchlist detail view.
-      await fetchDeep(deps, redis, env, "analysis", symbol, () => getAnalysis(deps, symbol));
-      await fetchDeep(deps, redis, env, "financialStatements", symbol, () => getFinancialStatements(deps, symbol));
+      // Deep-funnel liquidity / price floor — the first stage where a real
+      // per-symbol quote is available (the screener shortlist carries none).
+      if (!Number.isFinite(quote.price) || quote.price < DEEP_FUNNEL_MIN_PRICE) {
+        skipped.push({ symbol, reason: `price ${quote.price} below floor ${DEEP_FUNNEL_MIN_PRICE}` });
+        continue;
+      }
+      if (!Number.isFinite(quote.turnover) || quote.turnover < DEEP_FUNNEL_MIN_TURNOVER_IDR) {
+        skipped.push({ symbol, reason: `turnover ${quote.turnover} below floor ${DEEP_FUNNEL_MIN_TURNOVER_IDR}` });
+        continue;
+      }
 
+      const [brokerSummaryEnvelope, brokerAccumulationEnvelope, seasonalEnvelope, insidersEnvelope] = await Promise.all([
+        fetchDeep<DataEnvelope<BrokerSummaryData>>(deps, redis, env, "brokerSummary", symbol, () =>
+          getBrokerSummary(deps, symbol, true)
+        ),
+        fetchDeep<DataEnvelope<BrokerAccumulationData>>(deps, redis, env, "brokerAccumulation", symbol, () =>
+          getBrokerAccumulation(deps, symbol)
+        ),
+        fetchDeep<DataEnvelope<SeasonalData>>(deps, redis, env, "seasonal", symbol, () => getSeasonal(deps, symbol)),
+        fetchDeep<DataEnvelope<InsiderTransaction[]>>(deps, redis, env, "insiders", symbol, () =>
+          getInsiders(deps, symbol)
+        )
+      ]);
+
+      // Best-effort enrichment; never blocks a candidate. financial-statements
+      // returns 403 for API keys — swallow that.
+      await Promise.allSettled([
+        fetchDeep(deps, redis, env, "analysis", symbol, () => getAnalysis(deps, symbol)),
+        fetchDeep(deps, redis, env, "financialStatements", symbol, () => getFinancialStatements(deps, symbol))
+      ]);
+
+      await insertMarketSnapshotIdempotent(db, quoteEnvelope, null);
       await upsertBrokerSnapshot(db, brokerSummaryEnvelope, null);
       await upsertDailyBars(db, historyEnvelope);
 
       const dataStale =
         isEnvelopeStale(brokerSummaryEnvelope, now) ||
-        isEnvelopeStale(candidate.screener, now) ||
-        candidate.screener.status === "provisional";
+        isEnvelopeStale(quoteEnvelope, now) ||
+        quoteEnvelope.status === "provisional";
 
       const featureInput: FeatureEngineInput = {
         symbol,
-        tradingDate: candidate.screener.tradingDate,
-        inputSnapshotId: `${symbol}:${candidate.screener.tradingDate}:${brokerSummaryEnvelope.revisionId ?? "na"}`,
-        screener: candidate.screener.data,
+        tradingDate: quoteEnvelope.tradingDate,
+        inputSnapshotId: `${symbol}:${quoteEnvelope.tradingDate}:${brokerSummaryEnvelope.revisionId ?? "na"}`,
+        screener: quote,
         history: historyEnvelope.data,
         brokerSummaryByDay: [brokerSummaryEnvelope.data],
         brokerAccumulation: brokerAccumulationEnvelope.data,
@@ -155,20 +174,19 @@ export async function runDeepFunnel(
       const feature = computeFeatureSnapshot(featureInput, strategyConfig, now);
       await upsertFeatureSnapshot(db, feature, dataStale, feature.segmentMixed);
 
-      enriched.push({ symbol, screener: candidate.screener.data, envelope: candidate.screener, feature });
+      enriched.push({ symbol, quote, feature });
     } catch (err) {
       skipped.push({ symbol, reason: err instanceof Error ? err.message : String(err) });
     }
   }
 
   // First scoring pass: netRewardToRiskEstimate seeded from a preliminary
-  // risk plan built off a naive entry/stop (screener price / fixed pct
-  // stop), per interfaces.ts's documented two-pass design (scoring needs an
-  // R:R estimate before the real plan, which itself needs the score).
-  const scored = enriched.map(({ symbol, feature }) => {
-    const entryTrigger = feature.price.pctAboveBAvg !== null && feature.brokerFlow.bAvg !== null
-      ? feature.brokerFlow.bAvg * (1 + feature.price.pctAboveBAvg)
-      : (enriched.find((e) => e.symbol === symbol)?.screener.price ?? 0);
+  // risk plan built off a naive entry/stop (quote price / fixed pct stop).
+  const scored = enriched.map(({ symbol, quote, feature }) => {
+    const entryTrigger =
+      feature.price.pctAboveBAvg !== null && feature.brokerFlow.bAvg !== null
+        ? feature.brokerFlow.bAvg * (1 + feature.price.pctAboveBAvg)
+        : quote.price;
     const stopLossRaw = entryTrigger * (1 - DEEP_FUNNEL_PRELIMINARY_STOP_PCT);
 
     const preliminaryScore = scoreCandidate(
@@ -176,7 +194,7 @@ export async function runDeepFunnel(
         features: feature,
         userOpenRiskPct: deps.userOpenRiskPct ?? 0,
         hasUnreviewedNews: deps.hasUnreviewedNewsFor?.(symbol) ?? false,
-        netRewardToRiskEstimate: strategyConfig.risk.minNetRewardToRisk // neutral seed for pass 1
+        netRewardToRiskEstimate: strategyConfig.risk.minNetRewardToRisk
       },
       strategyConfig
     );
@@ -258,11 +276,7 @@ export async function runDeepFunnel(
 }
 
 function sessionEndIsoFor(now: string): string {
-  // Default expiry = end of current session; a precise session-calendar
-  // lookup happens in the scheduler (index.ts) which has access to
-  // buildSessionCalendar. Here we fall back to "now + until 15:49 local"
-  // is out of scope for a pure helper without timezone data, so callers
-  // that need exact session-close timestamps should pass one in via a
-  // future DeepFunnelDeps.sessionEndIso override; for V1 default to +6h.
+  // Default expiry = ~end of current session; the scheduler passes a precise
+  // session-calendar timestamp via DeepFunnelDeps.sessionEndIso when it can.
   return new Date(new Date(now).getTime() + 6 * 60 * 60 * 1000).toISOString();
 }

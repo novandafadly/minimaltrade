@@ -26,12 +26,20 @@ export interface DataEnvelope<T> {
   data: T;
 }
 
+/**
+ * A single per-symbol quote snapshot (last trading day): price/volume/turnover
+ * and, when available, top-of-book. On the real stock.arjum.com API this is
+ * NOT what `/api/screener/latest` returns (that endpoint is a curated signal
+ * shortlist, see ScreenerSignalRow); the adapter derives a ScreenerRow from
+ * the latest `/api/history/{code}` bar instead. The name is kept for
+ * compatibility with the feature engine, which consumes this shape.
+ */
 export interface ScreenerRow {
   symbol: string;
   board: string | null;
   price: number;
   priceChange: number;
-  priceChangePct: number;
+  priceChangePct: number; // fraction (0.02 == +2%), not percent
   volume: number;
   turnover: number;
   bestBid: number | null;
@@ -39,6 +47,24 @@ export interface ScreenerRow {
   spread: number | null;
   isSuspended: boolean;
   notation: string[] | null; // special notation codes (UMA etc) if present
+}
+
+/**
+ * One row of the real `/api/screener/latest` payload: a curated pattern-based
+ * signal, already filtered down from the whole universe by the upstream
+ * screener. Carries the upstream's own verdict (`bucket`) and historical
+ * event stats, but NO price/volume/liquidity — those come from `/api/history`
+ * during deep-funnel enrichment.
+ */
+export interface ScreenerSignalRow {
+  symbol: string;
+  name: string | null;
+  bucket: string; // e.g. "🟢 SINYAL BERSIH", "🥷 SINYAL SENYAP", "⏰ SINYAL TELAT", "⚔️ KONFLIK DISTRIBUSI"
+  summary: string | null;
+  note: string | null;
+  drawdown: number | null; // % (typically negative), historical event drawdown
+  wrEvent: number | null; // historical event win-rate, % (0-100)
+  potential: number | null; // % upside the upstream projects
 }
 
 export interface OhlcvBar {
@@ -130,6 +156,14 @@ export interface InsiderTransaction {
   insiderName: string | null;
   action: "buy" | "sell";
   shares: number;
+}
+
+/** Result of `/api/screener/latest` after normalization. */
+export interface ScreenerLatestResult {
+  asOf: string; // ISO timestamp of the screener run (best-effort: adapter receive time)
+  tradingDate: string; // YYYY-MM-DD (exchange-local)
+  rawHeadline: string | null; // the upstream's own one-line market summary, if present
+  candidates: ScreenerSignalRow[];
 }
 
 export interface HealthStatus {

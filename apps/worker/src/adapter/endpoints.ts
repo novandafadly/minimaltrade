@@ -15,6 +15,7 @@ import {
   insidersResponseSchema,
   type DataEnvelope,
   type ScreenerRow,
+  type ScreenerSignalRow,
   type HistoryData,
   type BrokerSummaryData,
   type BrokerAccumulationData,
@@ -31,8 +32,9 @@ import { archiveRawPayload } from "./archive.js";
 import { SchemaValidationError } from "./errors.js";
 import { buildEnvelope, isoDateOnly } from "./envelope.js";
 import {
-  normalizeScreenerRow,
+  normalizeScreenerSignalRow,
   normalizeHistory,
+  quoteFromHistory,
   normalizeBrokerSummary,
   normalizeBrokerAccumulation,
   normalizeAnalysis,
@@ -70,11 +72,29 @@ export interface AdapterContext {
   skipS3Archive?: boolean;
 }
 
+/** YYYY-MM-DD for a timestamp in the exchange's local timezone. */
+function localDateOnly(iso: string, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+      new Date(iso)
+    );
+  } catch {
+    return isoDateOnly(iso);
+  }
+}
+
+/** 0-11 month index for a timestamp in the exchange's local timezone. */
+function localMonthIndex(iso: string, timeZone: string): number {
+  try {
+    const m = new Intl.DateTimeFormat("en-US", { timeZone, month: "numeric" }).format(new Date(iso));
+    return Number(m) - 1;
+  } catch {
+    return new Date(iso).getUTCMonth();
+  }
+}
+
 /** Shared plumbing: call upstream, validate through the given schema, and
- * archive the raw payload either way (schemaValid true/false). Never
- * retries a schema-validation failure — that only happens after a
- * successful HTTP call, and callUpstream's own retry loop has already run
- * for transient HTTP failures. */
+ * archive the raw payload either way (schemaValid true/false). */
 async function fetchAndValidate<TSchema>(
   ctx: AdapterContext,
   endpointLabel: string,
@@ -102,7 +122,6 @@ async function fetchAndValidate<TSchema>(
       { skipS3: ctx.skipS3Archive }
     );
     const err = new SchemaValidationError(endpointLabel, parseResult.error.issues, result.json);
-    // rawPayloadId isn't part of the error type but useful for logs/tests
     (err as SchemaValidationError & { rawPayloadId?: string }).rawPayloadId = rawPayloadId;
     throw err;
   }
@@ -127,11 +146,16 @@ async function fetchAndValidate<TSchema>(
 }
 
 // ---------------------------------------------------------------------
-// 1. GET /api/screener/latest -- whole-universe, top-funnel-only endpoint
+// 1. GET /api/screener/latest -- curated signal shortlist (candidate list)
 // ---------------------------------------------------------------------
-export async function getScreenerLatest(
-  ctx: AdapterContext
-): Promise<{ asOf: string; tradingDate: string | null; rows: DataEnvelope<ScreenerRow>[] }> {
+export interface ScreenerLatestFetchResult {
+  asOf: string;
+  tradingDate: string;
+  rawHeadline: string | null;
+  candidates: DataEnvelope<ScreenerSignalRow>[];
+}
+
+export async function getScreenerLatest(ctx: AdapterContext): Promise<ScreenerLatestFetchResult> {
   const { parsed, receivedAt } = await fetchAndValidate(
     ctx,
     ENDPOINTS.screenerLatest,
@@ -139,20 +163,23 @@ export async function getScreenerLatest(
     null,
     screenerLatestResponseSchema
   );
-  const rows = parsed.data.map((row) =>
-    buildEnvelope<ScreenerRow>({
-      symbol: row.symbol,
-      tradingDate: parsed.trading_date ?? isoDateOnly(parsed.as_of),
-      eventTime: parsed.as_of,
-      publishedAt: parsed.as_of,
+  const tz = ctx.env.SESSION_TIMEZONE;
+  const tradingDate = localDateOnly(receivedAt, tz);
+  const rawHeadline = parsed.raw ? (parsed.raw.split("\n").find((l) => l.trim().length > 0) ?? null) : null;
+  const candidates = parsed.rows.map((row) =>
+    buildEnvelope<ScreenerSignalRow>({
+      symbol: row.stock_code,
+      tradingDate,
+      eventTime: receivedAt,
+      publishedAt: receivedAt,
       receivedAt,
       segment: "unknown",
       revisionId: null,
-      declaredStatus: parsed.status,
-      data: normalizeScreenerRow(row)
+      declaredStatus: "final",
+      data: normalizeScreenerSignalRow(row)
     })
   );
-  return { asOf: parsed.as_of, tradingDate: parsed.trading_date ?? null, rows };
+  return { asOf: receivedAt, tradingDate, rawHeadline, candidates };
 }
 
 // ---------------------------------------------------------------------
@@ -162,13 +189,14 @@ export async function getAnalysis(ctx: AdapterContext, symbol: string): Promise<
   const path = ENDPOINTS.analysis.replace("{code}", symbol);
   const { parsed, receivedAt } = await fetchAndValidate(ctx, ENDPOINTS.analysis, path, symbol, analysisResponseSchema);
   return buildEnvelope<AnalysisData>({
-    symbol: parsed.symbol,
-    tradingDate: parsed.as_of ? isoDateOnly(parsed.as_of) : null,
-    eventTime: parsed.as_of ?? null,
-    publishedAt: parsed.as_of ?? null,
+    symbol: parsed.stock_code,
+    tradingDate: localDateOnly(receivedAt, ctx.env.SESSION_TIMEZONE),
+    eventTime: null,
+    publishedAt: null,
     receivedAt,
     segment: "unknown",
     revisionId: null,
+    declaredStatus: "final",
     data: normalizeAnalysis(parsed)
   });
 }
@@ -179,13 +207,6 @@ export async function getAnalysis(ctx: AdapterContext, symbol: string): Promise<
 export async function getBrokerSummary(
   ctx: AdapterContext,
   symbol: string,
-  // The real payload carries no status/finality field at all, so the adapter
-  // itself cannot tell final EOD data from a partial/intraday read. The one
-  // caller that legitimately knows is the deep funnel, which by design (see
-  // apps/worker/src/index.ts's maybeRunDeepFunnelOnceToday) only ever runs
-  // this after the trading session has closed for the day -- it may pass
-  // assumeFinal=true to declare that. Any other caller must leave this false
-  // and accept the conservative "provisional" default.
   assumeFinal = false
 ): Promise<DataEnvelope<BrokerSummaryData>> {
   const path = ENDPOINTS.brokerSummary.replace("{code}", symbol);
@@ -198,11 +219,6 @@ export async function getBrokerSummary(
   );
   return buildEnvelope<BrokerSummaryData>({
     symbol: parsed.stock_code,
-    // The endpoint returns a date RANGE (broker_start_date..broker_end_date);
-    // we treat the end date as "the trading date this data pertains to" per
-    // the DataEnvelope contract. A range narrower than exactly one day (i.e.
-    // start === end) is what the deep funnel should request for a genuine
-    // single-session EOD read -- see fetchDeep's caller in funnel/deep.ts.
     tradingDate: parsed.broker_end_date,
     eventTime: null,
     publishedAt: null,
@@ -229,16 +245,17 @@ export async function getBrokerAccumulation(
     symbol,
     brokerAccumulationResponseSchema
   );
-  const lastDay = parsed.days[parsed.days.length - 1];
+  const data = normalizeBrokerAccumulation(parsed);
+  const lastDay = data.days[data.days.length - 1];
   return buildEnvelope<BrokerAccumulationData>({
-    symbol: parsed.symbol,
+    symbol: data.symbol,
     tradingDate: lastDay?.date ?? null,
     eventTime: null,
     publishedAt: null,
     receivedAt,
     segment: "unknown",
     revisionId: null,
-    data: normalizeBrokerAccumulation(parsed)
+    data
   });
 }
 
@@ -248,17 +265,32 @@ export async function getBrokerAccumulation(
 export async function getHistory(ctx: AdapterContext, symbol: string): Promise<DataEnvelope<HistoryData>> {
   const path = ENDPOINTS.history.replace("{code}", symbol);
   const { parsed, receivedAt } = await fetchAndValidate(ctx, ENDPOINTS.history, path, symbol, historyResponseSchema);
-  const lastBar = parsed.bars[parsed.bars.length - 1];
+  const data = normalizeHistory(parsed);
+  const lastBar = data.bars[data.bars.length - 1];
   return buildEnvelope<HistoryData>({
-    symbol: parsed.symbol,
+    symbol: data.symbol,
     tradingDate: lastBar?.date ?? null,
     eventTime: null,
     publishedAt: null,
     receivedAt,
-    segment: "unknown",
+    segment: "regular",
     revisionId: null,
-    data: normalizeHistory(parsed)
+    declaredStatus: "final",
+    data
   });
+}
+
+/**
+ * Build the per-symbol quote snapshot (`ScreenerRow`) the feature engine
+ * consumes from an already-fetched history envelope. The upstream screener
+ * endpoint carries no price/volume, so the deep funnel calls this after
+ * fetching `/api/history` for each candidate.
+ */
+export function quoteEnvelopeFromHistory(historyEnvelope: DataEnvelope<HistoryData>): DataEnvelope<ScreenerRow> {
+  return {
+    ...historyEnvelope,
+    data: quoteFromHistory(historyEnvelope.data)
+  };
 }
 
 // ---------------------------------------------------------------------
@@ -268,39 +300,33 @@ export async function getSeasonal(ctx: AdapterContext, symbol: string): Promise<
   const path = ENDPOINTS.seasonal.replace("{code}", symbol);
   const { parsed, receivedAt } = await fetchAndValidate(ctx, ENDPOINTS.seasonal, path, symbol, seasonalResponseSchema);
   return buildEnvelope<SeasonalData>({
-    symbol: parsed.symbol,
-    // seasonal data is a statistical aggregate, not tied to one trading date;
-    // it is timestamped by receipt for freshness bookkeeping only.
-    tradingDate: isoDateOnly(receivedAt),
+    symbol: parsed.stock_code,
+    tradingDate: localDateOnly(receivedAt, ctx.env.SESSION_TIMEZONE),
     eventTime: null,
     publishedAt: null,
     receivedAt,
     segment: "unknown",
     revisionId: null,
     declaredStatus: "final",
-    data: normalizeSeasonal(parsed)
+    data: normalizeSeasonal(parsed, localMonthIndex(receivedAt, ctx.env.SESSION_TIMEZONE))
   });
 }
 
 // ---------------------------------------------------------------------
-// 7. GET /api/market-cap -- whole-universe
+// 7. GET /api/market-cap -- paginated whole-universe (page 1 by default)
 // ---------------------------------------------------------------------
 export async function getMarketCap(
-  ctx: AdapterContext
-): Promise<{ asOf: string | null; entries: DataEnvelope<MarketCapEntry>[] }> {
-  const { parsed, receivedAt } = await fetchAndValidate(
-    ctx,
-    ENDPOINTS.marketCap,
-    ENDPOINTS.marketCap,
-    null,
-    marketCapResponseSchema
-  );
+  ctx: AdapterContext,
+  page?: number
+): Promise<{ asOf: string | null; totalPages: number; entries: DataEnvelope<MarketCapEntry>[] }> {
+  const path = page && page > 1 ? `${ENDPOINTS.marketCap}?page=${page}` : ENDPOINTS.marketCap;
+  const { parsed, receivedAt } = await fetchAndValidate(ctx, ENDPOINTS.marketCap, path, null, marketCapResponseSchema);
   const entries = normalizeMarketCapEntries(parsed).map((entry) =>
     buildEnvelope<MarketCapEntry>({
       symbol: entry.symbol,
-      tradingDate: parsed.as_of ? isoDateOnly(parsed.as_of) : null,
-      eventTime: parsed.as_of ?? null,
-      publishedAt: parsed.as_of ?? null,
+      tradingDate: parsed.date ?? localDateOnly(receivedAt, ctx.env.SESSION_TIMEZONE),
+      eventTime: null,
+      publishedAt: null,
       receivedAt,
       segment: "unknown",
       revisionId: null,
@@ -308,11 +334,11 @@ export async function getMarketCap(
       data: entry
     })
   );
-  return { asOf: parsed.as_of ?? null, entries };
+  return { asOf: parsed.date ?? null, totalPages: parsed.total_pages ?? 1, entries };
 }
 
 // ---------------------------------------------------------------------
-// 8. GET /api/search -- on-demand, no envelope/freshness semantics needed
+// 8. GET /api/search
 // ---------------------------------------------------------------------
 export async function search(ctx: AdapterContext, query: string): Promise<SearchResultEntry[]> {
   const path = `${ENDPOINTS.search}?q=${encodeURIComponent(query)}`;
@@ -329,7 +355,8 @@ export async function getHealth(ctx: AdapterContext): Promise<HealthStatus> {
 }
 
 // ---------------------------------------------------------------------
-// 10. GET /api/financial-statements/{code}
+// 10. GET /api/financial-statements/{code}  (403 for API keys — callers must
+//     tolerate an UpstreamHttpError from this one)
 // ---------------------------------------------------------------------
 export async function getFinancialStatements(
   ctx: AdapterContext,
@@ -344,13 +371,13 @@ export async function getFinancialStatements(
     financialStatementResponseSchema
   );
   return buildEnvelope<FinancialStatementData>({
-    symbol: parsed.symbol,
-    tradingDate: isoDateOnly(receivedAt),
+    symbol: parsed.stock_code ?? parsed.symbol ?? symbol,
+    tradingDate: localDateOnly(receivedAt, ctx.env.SESSION_TIMEZONE),
     eventTime: null,
     publishedAt: null,
     receivedAt,
     segment: "unknown",
-    revisionId: parsed.fiscal_period,
+    revisionId: parsed.fiscal_period ?? null,
     declaredStatus: "final",
     data: normalizeFinancialStatement(parsed)
   });
@@ -359,16 +386,13 @@ export async function getFinancialStatements(
 // ---------------------------------------------------------------------
 // 11. GET /api/insiders/{code}
 // ---------------------------------------------------------------------
-export async function getInsiders(
-  ctx: AdapterContext,
-  symbol: string
-): Promise<DataEnvelope<InsiderTransaction[]>> {
+export async function getInsiders(ctx: AdapterContext, symbol: string): Promise<DataEnvelope<InsiderTransaction[]>> {
   const path = ENDPOINTS.insiders.replace("{code}", symbol);
   const { parsed, receivedAt } = await fetchAndValidate(ctx, ENDPOINTS.insiders, path, symbol, insidersResponseSchema);
   const transactions = normalizeInsiders(parsed);
   const lastDate = transactions[transactions.length - 1]?.date ?? null;
   return buildEnvelope<InsiderTransaction[]>({
-    symbol,
+    symbol: parsed.stock_code,
     tradingDate: lastDate,
     eventTime: null,
     publishedAt: null,
