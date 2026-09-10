@@ -190,9 +190,21 @@ export async function upsertFeatureSnapshot(
   return row?.id ?? id;
 }
 
-export async function insertSignal(db: Db, sig: Signal, featureSnapshotId: string | null): Promise<string> {
+/**
+ * Idempotent on (symbol, trading_date): a re-run of the deep funnel for the
+ * same day (worker restart, manual trigger) updates the existing signal row
+ * instead of adding a duplicate. Returns the real row id (existing or new)
+ * so the trade-plan FK stays stable. `gates` is the ScoreResult's hard-gate
+ * results, persisted for the dashboard's "why NO_TRADE / AVOID" view.
+ */
+export async function insertSignal(
+  db: Db,
+  sig: Signal,
+  gates: object,
+  featureSnapshotId: string | null
+): Promise<string> {
   const id = randomUUID();
-  await db.insert(schema.signal).values({
+  const values = {
     id,
     symbol: sig.symbol,
     tradingDate: sig.tradingDate,
@@ -202,18 +214,39 @@ export async function insertSignal(db: Db, sig: Signal, featureSnapshotId: strin
     compositeScore: String(sig.compositeScore),
     confidence: sig.confidence,
     noTradeReason: sig.noTradeReason,
-    gates: [] as unknown as object,
+    gates,
     formulaVersion: sig.formulaVersion,
     configVersion: sig.configVersion,
     inputSnapshotId: sig.inputSnapshotId,
     featureSnapshotId
-  });
-  return id;
+  };
+  const [row] = await db
+    .insert(schema.signal)
+    .values(values)
+    .onConflictDoUpdate({
+      target: [schema.signal.symbol, schema.signal.tradingDate],
+      set: {
+        generatedAt: values.generatedAt,
+        expiry: values.expiry,
+        category: values.category,
+        compositeScore: values.compositeScore,
+        confidence: values.confidence,
+        noTradeReason: values.noTradeReason,
+        gates: values.gates,
+        formulaVersion: values.formulaVersion,
+        configVersion: values.configVersion,
+        inputSnapshotId: values.inputSnapshotId,
+        featureSnapshotId: values.featureSnapshotId
+      }
+    })
+    .returning({ id: schema.signal.id });
+  return row?.id ?? id;
 }
 
+/** Idempotent on signal_id (one trade plan per signal). */
 export async function insertTradePlan(db: Db, signalId: string, plan: TradePlan): Promise<string> {
   const id = randomUUID();
-  await db.insert(schema.tradePlan).values({
+  const values = {
     id,
     signalId,
     symbol: plan.symbol,
@@ -240,6 +273,14 @@ export async function insertTradePlan(db: Db, signalId: string, plan: TradePlan)
     netRewardToRisk: String(plan.netRewardToRisk),
     isNoTrade: plan.isNoTrade,
     noTradeReason: plan.noTradeReason
-  });
-  return id;
+  };
+  const updatable: Record<string, unknown> = { ...values };
+  delete updatable.id;
+  delete updatable.signalId;
+  const [row] = await db
+    .insert(schema.tradePlan)
+    .values(values)
+    .onConflictDoUpdate({ target: schema.tradePlan.signalId, set: updatable })
+    .returning({ id: schema.tradePlan.id });
+  return row?.id ?? id;
 }
