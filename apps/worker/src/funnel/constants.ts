@@ -37,4 +37,4 @@ export const DEEP_FUNNEL_MIN_PRICE = 51;
 /** Preliminary stop-loss distance used only to seed the scoring engine's
  * netRewardToRiskEstimate input before the real risk plan is built from the
  * actual ScoreResult. Expressed as a fraction below the trigger price. */
-export const DEEP_FUNNEL_PRELIMINARY_STOP_PCT = 0.03;
+export const DEEP_FUNNEL_PRELIMINARY_STOP_PCT = 0.05;

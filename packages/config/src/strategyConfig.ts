@@ -8,7 +8,7 @@
  */
 
 export const FORMULA_VERSION = "1.0.0";
-export const STRATEGY_CONFIG_VERSION = "v2-2026-09-10";
+export const STRATEGY_CONFIG_VERSION = "v3-2026-09-10";
 
 export interface BrokerConcentrationThresholds {
   /** minimum net-buy share of a single broker to count as a "meaningful buyer" */
@@ -119,7 +119,7 @@ export const DEFAULT_STRATEGY_CONFIG: StrategyConfig = {
     tp2AllocationPct: 0.4,
     tp1RiskMultiple: 2,
     tp2RiskMultiple: 3,
-    minNetRewardToRisk: 2,
+    minNetRewardToRisk: 1.75,
     chaseMaxPctAboveBAvg: 0.035,
     slippageAllowancePerShare: 2,
     // Stockbit Sekuritas all-in rates (brokerage + IDX/KPEI/KSEI levies + PPN,
