@@ -5,6 +5,7 @@ import { SummaryStrip } from "./SummaryStrip";
 import { TriggerTable } from "./TriggerTable";
 import { DetailDrawer } from "./DetailDrawer";
 import { JournalView } from "./JournalView";
+import { ShadowView } from "./ShadowView";
 import { LoadingState, EmptyState, ErrorState, DegradedBanner, DownBanner, PartialDataBanner } from "./StatePanels";
 import { useHealth, useSignals, useSseSignalStream } from "../lib/hooks";
 import { useUiStore } from "../store/uiStore";
@@ -34,6 +35,9 @@ export function Dashboard() {
         <button className={view === "journal" ? "tab-active" : ""} onClick={() => setView("journal")}>
           Journal
         </button>
+        <button className={view === "shadow" ? "tab-active" : ""} onClick={() => setView("shadow")}>
+          Shadow test
+        </button>
       </nav>
 
       {healthQuery.data?.status === "down" ? <DownBanner notes={healthQuery.data.notes} /> : null}
@@ -58,8 +62,10 @@ export function Dashboard() {
             <TriggerTable signals={signalsQuery.data.signals} />
           )}
         </>
-      ) : (
+      ) : view === "journal" ? (
         <JournalView />
+      ) : (
+        <ShadowView />
       )}
 
       <DetailDrawer />
