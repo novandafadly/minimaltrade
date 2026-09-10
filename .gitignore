@@ -15,4 +15,5 @@ coverage/
 
 # backtest CLI output
 replay-report*.json
+sweep-report*.json
 *.replay.json

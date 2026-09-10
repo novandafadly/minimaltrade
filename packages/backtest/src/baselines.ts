@@ -63,34 +63,72 @@ function baselineScore(symbol: string, tradingDate: string, config: StrategyConf
   };
 }
 
+/** Preliminary-stop placement rules, used by the baseline plans and swept in
+ * paramSweep.ts. All derive purely from OHLCV. */
+export type StopMethod = "low5" | "low10" | "pct3" | "pct5" | "atr1_5" | "atr2";
+
+function atr(bars: HistoryData["bars"], period = 14): number | null {
+  const window = bars.slice(-(period + 1));
+  if (window.length < 2) return null;
+  const trs: number[] = [];
+  for (let i = 1; i < window.length; i++) {
+    const cur = window[i]!;
+    const prevClose = window[i - 1]!.close;
+    trs.push(Math.max(cur.high - cur.low, Math.abs(cur.high - prevClose), Math.abs(cur.low - prevClose)));
+  }
+  return trs.reduce((a, b) => a + b, 0) / trs.length;
+}
+
+export function stopFor(method: StopMethod, bars: HistoryData["bars"]): number | null {
+  const last = bars[bars.length - 1];
+  if (!last) return null;
+  switch (method) {
+    case "low5":
+      return Math.min(...bars.slice(-5).map((b) => b.low));
+    case "low10":
+      return Math.min(...bars.slice(-10).map((b) => b.low));
+    case "pct3":
+      return last.close * 0.97;
+    case "pct5":
+      return last.close * 0.95;
+    case "atr1_5": {
+      const a = atr(bars);
+      return a === null ? null : last.close - 1.5 * a;
+    }
+    case "atr2": {
+      const a = atr(bars);
+      return a === null ? null : last.close - 2 * a;
+    }
+  }
+}
+
 /**
  * A naive-but-documented entry/stop for baseline candidates, derived purely
- * from OHLCV (no broker-flow data): enter at the last close, stop below the
- * recent (5-day) low. This is not meant to be a good trading rule -- it
- * exists only so the baseline's fill/exit simulation is apples-to-apples
- * with the signal-driven strategy's plan shape.
+ * from OHLCV (no broker-flow data): enter at the last close, stop per
+ * `stopMethod` (default: the recent 5-day low). Exists only so the baseline
+ * fill/exit simulation is apples-to-apples with the signal strategy's plan.
  */
 export function planFromHistory(
   symbol: string,
   tradingDate: string,
   history: HistoryData,
   config: StrategyConfig,
-  sessionEndIso: string
+  sessionEndIso: string,
+  stopMethod: StopMethod = "low5"
 ): TradePlan | null {
   const bars = history.bars;
   if (bars.length === 0) return null;
   const last = bars[bars.length - 1];
   if (!last) return null;
-  const lookback = bars.slice(-5);
-  const recentLow = Math.min(...lookback.map((b) => b.low));
-  if (recentLow >= last.close) return null; // degenerate, no valid stop below entry
+  const stopLossRaw = stopFor(stopMethod, bars);
+  if (stopLossRaw === null || stopLossRaw >= last.close) return null; // no valid stop below entry
 
   return buildRiskPlan(
     {
       symbol,
       tradingDate,
       entryTrigger: last.close,
-      stopLossRaw: recentLow,
+      stopLossRaw,
       score: baselineScore(symbol, tradingDate, config),
       sessionEndIso
     },
