@@ -25,7 +25,9 @@ export async function truncateAll(): Promise<void> {
       ${schema.marketSnapshot},
       ${schema.rawPayloadArchive},
       ${schema.requestLedger},
-      ${schema.alertLog}
+      ${schema.alertLog},
+      ${schema.shadowPlan},
+      ${schema.dailyBar}
     RESTART IDENTITY CASCADE
   `);
 }
