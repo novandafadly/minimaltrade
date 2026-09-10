@@ -26,6 +26,14 @@ export class PostgresDataSource implements ReplayDataSource {
   constructor(private readonly db: Db) {}
 
   async listTradingDates(): Promise<string[]> {
+    // Prefer daily_bar (true OHLCV, and what the historical backfill populates);
+    // fall back to market_snapshot for pre-daily_bar deployments.
+    const barDates = await this.db
+      .selectDistinct({ tradingDate: dailyBar.tradingDate })
+      .from(dailyBar)
+      .orderBy(asc(dailyBar.tradingDate));
+    if (barDates.length > 0) return barDates.map((r) => r.tradingDate);
+
     const rows = await this.db
       .selectDistinct({ tradingDate: marketSnapshot.tradingDate })
       .from(marketSnapshot)
@@ -100,6 +108,48 @@ export class PostgresDataSource implements ReplayDataSource {
 
   async listUniverseAsOf(asOf: string): Promise<LiquidUniverseEntry[]> {
     const asOfDate = asOf.slice(0, 10);
+
+    const sectorBySymbol = new Map<string, string | null>();
+    const instruments = await this.db.select().from(instrument);
+    for (const i of instruments) sectorBySymbol.set(i.symbol, i.sector);
+
+    // Prefer daily_bar (real OHLCV). turnover falls back to close*volume when
+    // the bar's own turnover column is null.
+    const barRows = await this.db
+      .select()
+      .from(dailyBar)
+      .where(and(lte(dailyBar.tradingDate, asOfDate), lte(dailyBar.receivedAt, new Date(asOf))))
+      .orderBy(asc(dailyBar.tradingDate));
+
+    if (barRows.length > 0) {
+      const bySymbol = new Map<string, typeof barRows>();
+      for (const r of barRows) {
+        const arr = bySymbol.get(r.symbol);
+        if (arr) arr.push(r);
+        else bySymbol.set(r.symbol, [r]);
+      }
+      const result: LiquidUniverseEntry[] = [];
+      for (const [symbol, rows] of bySymbol) {
+        if (rows.length < 5) continue;
+        const window = rows.slice(-20);
+        const avgVolume20d = window.reduce((s, r) => s + Number(r.volume), 0) / window.length;
+        const avgTurnover20d =
+          window.reduce((s, r) => s + (r.turnover !== null ? Number(r.turnover) : Number(r.close) * Number(r.volume)), 0) /
+          window.length;
+        const last = window[window.length - 1];
+        if (!last) continue;
+        result.push({
+          symbol,
+          avgVolume20d,
+          avgTurnover20d,
+          lastClose: Number(last.close),
+          sector: sectorBySymbol.get(symbol) ?? null,
+          marketCap: null
+        });
+      }
+      return result;
+    }
+
     const rows = await this.db
       .select()
       .from(marketSnapshot)
@@ -112,10 +162,6 @@ export class PostgresDataSource implements ReplayDataSource {
       if (arr) arr.push(r);
       else bySymbol.set(r.symbol, [r]);
     }
-
-    const sectorBySymbol = new Map<string, string | null>();
-    const instruments = await this.db.select().from(instrument);
-    for (const i of instruments) sectorBySymbol.set(i.symbol, i.sector);
 
     const result: LiquidUniverseEntry[] = [];
     for (const [symbol, symbolRows] of bySymbol) {
