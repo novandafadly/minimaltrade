@@ -1,4 +1,4 @@
-import type { DataEnvelope, HistoryData, OhlcvBar } from "@idx/domain";
+import type { BrokerSummaryData, DataEnvelope, HistoryData, OhlcvBar } from "@idx/domain";
 import type { TradePlan } from "@idx/domain";
 
 /**
@@ -60,6 +60,15 @@ export interface ReplayDataSource {
    * and domain engines' job); it replays plans that already exist.
    */
   getTradePlansForDate(tradingDate: string): Promise<TradePlan[]>;
+
+  /**
+   * DECISION-TIME (optional — only the Postgres source implements it). Per-day
+   * broker flow for `symbol` over the last `days` trading days on/before
+   * `asOf`, ascending (most recent last). Used to reconstruct a historical
+   * `FeatureEngineInput.brokerSummaryByDay` for the signal-from-history
+   * replay strategy.
+   */
+  getBrokerHistoryAsOf?(symbol: string, asOf: string, days?: number): Promise<BrokerSummaryData[]>;
 
   /**
    * SIMULATION-TIME (NOT asOf-guarded). The bar for `symbol` on `date`
