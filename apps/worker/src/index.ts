@@ -9,7 +9,7 @@ import { loadEnv, buildSessionCalendar, isWithinSession, DEFAULT_STRATEGY_CONFIG
 import { createDbClient, schema } from "@idx/db";
 import { eq } from "drizzle-orm";
 import { createRedisClient } from "./cache/redis.js";
-import { getScreenerLatest, type AdapterContext } from "./adapter/endpoints.js";
+import { getScreenerLatest, getMarketCapAll, type AdapterContext } from "./adapter/endpoints.js";
 import { getOrFetch } from "./cache/cache.js";
 import { CACHE_TTL_SECONDS } from "./cache/ttl.js";
 import { reserveRequest, recordLedgerEntry } from "./cache/budget.js";
@@ -201,6 +201,9 @@ async function maybeRunDeepFunnelOnceToday(
   //     now have enough forward daily_bar history (blueprint forward-test). ---
   try {
     const sessionEndIso = `${dayBucket}T08:49:00.000Z`;
+    const { value: marketCap } = await getOrFetch(redis, "marketCap", "universe", CACHE_TTL_SECONDS.marketCap, () =>
+      getMarketCapAll(ctx).then((r) => r.entries.map((e) => e.data))
+    );
     const shadow = await persistShadowPlans({
       ctx: { env, db },
       redis,
@@ -208,11 +211,12 @@ async function maybeRunDeepFunnelOnceToday(
       tradingDate: dayBucket,
       sessionEndIso,
       screenerCandidates: screenerResult.candidates,
-      liveSignals: deepResult.activeWatchlist.map((c) => c.signal)
+      liveSignals: deepResult.activeWatchlist.map((c) => c.signal),
+      marketCap
     });
     const evalResult = await evaluateShadowOutcomes(db, strategyConfig);
     console.log(
-      `[shadow] persisted live=${shadow.live} baseline=${shadow.baseline}; evaluated ${evalResult.evaluated} pending outcomes`
+      `[shadow] persisted live=${shadow.live} baseline=${shadow.baseline} screeners=${shadow.screeners}; evaluated ${evalResult.evaluated} pending outcomes`
     );
   } catch (err) {
     console.error("[shadow] step failed (non-fatal):", err instanceof Error ? err.message : err);

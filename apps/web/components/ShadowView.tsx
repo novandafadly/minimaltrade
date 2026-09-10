@@ -5,10 +5,32 @@ import { LoadingState, ErrorState } from "./StatePanels";
 import type { ShadowSourceStats } from "../lib/types";
 
 const SOURCE_LABEL: Record<string, string> = {
-  live: "Live (broker-flow score)",
+  live: "Live — ARJUM + full engine",
+  screener_arjum: "Screener — ARJUM shortlist",
+  screener_marketcap: "Screener — ARJUM ∩ liquidity/size",
+  screener_technical: "Screener — technical breakout",
+  screener_consensus: "Screener — consensus (≥2 agree)",
   baseline_volume: "Baseline — volume rank",
   baseline_random: "Baseline — random"
 };
+
+const SOURCE_ORDER = [
+  "live",
+  "screener_consensus",
+  "screener_arjum",
+  "screener_marketcap",
+  "screener_technical",
+  "baseline_volume",
+  "baseline_random"
+];
+
+function orderSources(stats: ShadowSourceStats[]): ShadowSourceStats[] {
+  return [...stats].sort((a, b) => {
+    const ia = SOURCE_ORDER.indexOf(a.source);
+    const ib = SOURCE_ORDER.indexOf(b.source);
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib);
+  });
+}
 
 function rupiah(n: number): string {
   const sign = n < 0 ? "−" : "";
@@ -24,24 +46,41 @@ function pnlClass(n: number | null): string {
   return n > 0 ? "positive-result" : "negative-result";
 }
 
+const MIN_EVAL = 20;
+
 function verdict(stats: ShadowSourceStats[]): string {
-  const live = stats.find((s) => s.source === "live");
-  const bv = stats.find((s) => s.source === "baseline_volume");
-  const br = stats.find((s) => s.source === "baseline_random");
-  if (!live || live.evaluated < 20) {
-    return `Not enough data yet — need ~20+ evaluated live plans (have ${live?.evaluated ?? 0}). Keep it running for a few weeks.`;
+  const by = (src: string) => stats.find((s) => s.source === src);
+  const ready = (s?: ShadowSourceStats) => !!s && s.evaluated >= MIN_EVAL;
+
+  const screeners = stats.filter((s) => s.source.startsWith("screener_"));
+  const baselines = stats.filter((s) => s.source.startsWith("baseline_"));
+  const live = by("live");
+
+  const readyScreeners = screeners.filter(ready);
+  if (readyScreeners.length === 0) {
+    const best = screeners.reduce((m, s) => Math.max(m, s.evaluated), 0);
+    return `Not enough data yet — best screener has ${best} evaluated plans, need ~${MIN_EVAL}. Keep it running (~15-30 trading days).`;
   }
-  const beatsBoth = (b?: ShadowSourceStats) =>
-    b && live.expectancy > b.expectancy && live.profitFactor > b.profitFactor;
-  if (beatsBoth(bv) && beatsBoth(br)) {
-    return "Live beats BOTH baselines on expectancy AND profit factor — the broker-flow score is adding value.";
+
+  const bestScreener = readyScreeners.reduce((a, b) => (b.expectancy > a.expectancy ? b : a));
+  const label = SOURCE_LABEL[bestScreener.source] ?? bestScreener.source;
+  const beatsAllBaselines = baselines
+    .filter(ready)
+    .every((b) => bestScreener.expectancy > b.expectancy && bestScreener.profitFactor > b.profitFactor);
+
+  if (!beatsAllBaselines) {
+    return `No screener beats the random/volume baselines yet on expectancy + profit factor. The ARJUM shortlist and the technical screen are not (yet) proven to add value over picking liquid names at random.`;
   }
-  const worseThanEither =
-    (bv && live.expectancy < bv.expectancy) || (br && live.expectancy < br.expectancy);
-  if (worseThanEither) {
-    return "Live is WORSE than a baseline — the composite score may be hurting, not helping. Consider dropping / reweighting it.";
+
+  let msg = `Best screener so far: ${label} (expectancy ${rupiah(bestScreener.expectancy)}/plan, PF ${bestScreener.profitFactor === Infinity ? "∞" : bestScreener.profitFactor.toFixed(2)}) — beats both baselines.`;
+  if (ready(live)) {
+    if (live!.expectancy > bestScreener.expectancy) {
+      msg += ` The full engine (live) still beats it — the composite score is adding value on top of the screener.`;
+    } else {
+      msg += ` The full engine (live) does NOT beat it — the score may be over-engineered; the screener does the work.`;
+    }
   }
-  return "Live roughly matches the baselines — the screener + liquidity filter is doing the work; the composite score is not (yet) proven to add value.";
+  return msg;
 }
 
 export function ShadowView() {
@@ -56,17 +95,19 @@ export function ShadowView() {
       />
     );
 
-  const stats = q.data?.stats ?? [];
+  const stats = orderSources(q.data?.stats ?? []);
   const recent = q.data?.recent ?? [];
 
   return (
     <div className="shadow-view">
       <p className="shadow-intro">
-        Every EOD the engine records three plans over the same candidate pool: the real{" "}
-        <strong>live</strong> broker-flow signal, plus <strong>volume-rank</strong> and{" "}
-        <strong>random</strong> baselines. Once ~3 trading days of price history pass, each plan&apos;s
-        outcome is simulated. If the score is worth its complexity, <strong>live</strong> should beat
-        both baselines on expectancy and profit factor.
+        Every EOD the engine records a plan for each <strong>source</strong> over the same forward
+        window: the <strong>live</strong> signal (ARJUM shortlist + full feature/scoring/risk engine),
+        four candidate <strong>screeners</strong> (ARJUM raw, ARJUM ∩ liquidity/size, a technical
+        breakout screen, and their consensus), and two dumb <strong>baselines</strong> (volume rank,
+        random). Every non-live plan is built the same way — off OHLCV with a 5-day-low stop — so this
+        isolates <em>which shortlist</em> works from <em>whether the score works</em>. Outcomes are
+        simulated once ~3 trading days of price history pass.
       </p>
 
       <div className="shadow-verdict">{verdict(stats)}</div>
@@ -142,7 +183,7 @@ export function ShadowView() {
                 <tr key={`${r.tradingDate}-${r.source}-${r.symbol}-${i}`}>
                   <td>{r.tradingDate}</td>
                   <td>{r.symbol}</td>
-                  <td>{r.source.replace("baseline_", "").replace("live", "live")}</td>
+                  <td>{r.source.replace("screener_", "").replace("baseline_", "~")}</td>
                   <td>{r.category ?? "—"}</td>
                   <td>{r.entryTrigger.toLocaleString("id-ID")}</td>
                   <td>{r.slPrice.toLocaleString("id-ID")}</td>
