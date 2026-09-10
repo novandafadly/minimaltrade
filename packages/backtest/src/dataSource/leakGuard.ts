@@ -82,6 +82,13 @@ export function withLeakGuard(source: ReplayDataSource): ReplayDataSource {
       return source.listUniverseAsOf(asOf);
     },
     getTradePlansForDate: source.getTradePlansForDate.bind(source),
+    // getBrokerHistoryAsOf carries no per-row timestamp in its return type
+    // (BrokerSummaryData has no date), so it cannot be guarded here. The
+    // PostgresDataSource enforces the constraint in SQL instead
+    // (`trading_date <= asOf AND received_at <= asOf`).
+    ...(source.getBrokerHistoryAsOf
+      ? { getBrokerHistoryAsOf: source.getBrokerHistoryAsOf.bind(source) }
+      : {}),
     getBarOn: source.getBarOn.bind(source),
     getSimulationBars: source.getSimulationBars.bind(source)
   };

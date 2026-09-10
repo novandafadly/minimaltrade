@@ -14,5 +14,5 @@ coverage/
 /packages/*/dist/
 
 # backtest CLI output
-replay-report.json
+replay-report*.json
 *.replay.json

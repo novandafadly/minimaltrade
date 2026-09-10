@@ -1,7 +1,7 @@
-import { and, asc, desc, eq, gt, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gt, inArray, lte } from "drizzle-orm";
 import type { Db } from "@idx/db";
-import { dailyBar, instrument, marketSnapshot, tradePlan as tradePlanTable } from "@idx/db";
-import type { DataEnvelope, HistoryData, OhlcvBar, TradePlan } from "@idx/domain";
+import { brokerSnapshot, dailyBar, instrument, marketSnapshot, tradePlan as tradePlanTable } from "@idx/db";
+import type { BrokerSummaryData, DataEnvelope, HistoryData, OhlcvBar, TradePlan } from "@idx/domain";
 import type { LiquidUniverseEntry, ReplayDataSource } from "./types.js";
 
 /**
@@ -51,9 +51,7 @@ export class PostgresDataSource implements ReplayDataSource {
       .orderBy(asc(dailyBar.tradingDate));
 
     if (barRows.length > 0) {
-      const bars: OhlcvBar[] = barRows.map(dailyBarRowToBar);
-      const volumes = [...bars.map((b) => b.volume)].sort((a, b) => a - b);
-      const baselineMedianVolume20d = volumes.length > 0 ? (volumes[Math.floor(volumes.length / 2)] ?? null) : null;
+      const allBars: OhlcvBar[] = barRows.map(dailyBarRowToBar);
       const last = barRows[barRows.length - 1];
       if (!last) return null;
       return {
@@ -66,7 +64,10 @@ export class PostgresDataSource implements ReplayDataSource {
         segment: "regular",
         revisionId: null,
         status: "final",
-        data: { symbol, bars: bars.slice(-20), baselineMedianVolume20d }
+        // Return a deeper window (the feature engine reads bars[-21..-1] for
+        // the turnover baseline and bars[-1] for "today"); baseline median is
+        // computed EX-today over the trailing 20, matching the live adapter.
+        data: { symbol, bars: allBars.slice(-40), baselineMedianVolume20d: medianVolumeExToday(allBars, 20) }
       };
     }
 
@@ -183,6 +184,74 @@ export class PostgresDataSource implements ReplayDataSource {
     return result;
   }
 
+  /**
+   * DECISION-TIME. Per-day broker flow for `symbol` over the last `days`
+   * trading days on/before `asOf` (ascending, most recent last — the
+   * FeatureEngineInput.brokerSummaryByDay contract). Reconstructed from
+   * `broker_snapshot` rows; on backfilled data those carry only NET flow
+   * approximated onto one side (see backfill.ts).
+   */
+  async getBrokerHistoryAsOf(symbol: string, asOf: string, days = 5): Promise<BrokerSummaryData[]> {
+    const asOfDate = asOf.slice(0, 10);
+    const rows = await this.db
+      .select()
+      .from(brokerSnapshot)
+      .where(
+        and(
+          eq(brokerSnapshot.symbol, symbol),
+          lte(brokerSnapshot.tradingDate, asOfDate),
+          lte(brokerSnapshot.receivedAt, new Date(asOf))
+        )
+      )
+      .orderBy(asc(brokerSnapshot.tradingDate));
+
+    if (rows.length === 0) return [];
+
+    const distinctDates = [...new Set(rows.map((r) => r.tradingDate))].sort();
+    const keepDates = new Set(distinctDates.slice(-days));
+
+    const byDate = new Map<string, typeof rows>();
+    for (const r of rows) {
+      if (!keepDates.has(r.tradingDate)) continue;
+      const arr = byDate.get(r.tradingDate);
+      if (arr) arr.push(r);
+      else byDate.set(r.tradingDate, [r]);
+    }
+
+    return [...byDate.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([, dayRows]) => {
+        const brokers = dayRows.map((r) => ({
+          brokerCode: r.brokerCode,
+          buyVolume: Number(r.buyVolume),
+          buyValue: Number(r.buyValue),
+          sellVolume: Number(r.sellVolume),
+          sellValue: Number(r.sellValue),
+          netVolume: Number(r.netVolume),
+          netValue: Number(r.netValue),
+          avgBuyPrice: r.avgBuyPrice !== null ? Number(r.avgBuyPrice) : null,
+          avgSellPrice: r.avgSellPrice !== null ? Number(r.avgSellPrice) : null
+        }));
+        return {
+          symbol,
+          segment: "regular" as const,
+          brokers,
+          totalVolume: brokers.reduce((s, b) => s + b.buyVolume + b.sellVolume, 0),
+          totalValue: brokers.reduce((s, b) => s + b.buyValue + b.sellValue, 0)
+        };
+      });
+  }
+
+  /** Symbols that have any broker_snapshot row on/before `asOf`. */
+  async symbolsWithBrokerHistoryAsOf(asOf: string, candidates: string[]): Promise<Set<string>> {
+    if (candidates.length === 0) return new Set();
+    const rows = await this.db
+      .selectDistinct({ symbol: brokerSnapshot.symbol })
+      .from(brokerSnapshot)
+      .where(and(inArray(brokerSnapshot.symbol, candidates), lte(brokerSnapshot.receivedAt, new Date(asOf))));
+    return new Set(rows.map((r) => r.symbol));
+  }
+
   async getTradePlansForDate(tradingDate: string): Promise<TradePlan[]> {
     const rows = await this.db.select().from(tradePlanTable).where(eq(tradePlanTable.tradingDate, tradingDate));
     return rows.filter((r) => !r.isNoTrade).map(rowToTradePlan);
@@ -224,6 +293,20 @@ export class PostgresDataSource implements ReplayDataSource {
       .limit(maxBars);
     return rows.map(rowToBar);
   }
+}
+
+/** Median volume over the trailing `window` bars, EXCLUDING the most recent
+ * (the "today" bar) — matches the live adapter's medianVolumeExcludingLast. */
+function medianVolumeExToday(bars: OhlcvBar[], window = 20): number | null {
+  const pool = bars
+    .slice(0, -1)
+    .slice(-window)
+    .map((b) => b.volume)
+    .filter((v) => v > 0)
+    .sort((a, b) => a - b);
+  if (pool.length === 0) return null;
+  const mid = Math.floor(pool.length / 2);
+  return pool.length % 2 === 0 ? ((pool[mid - 1] ?? 0) + (pool[mid] ?? 0)) / 2 : (pool[mid] ?? 0);
 }
 
 function dailyBarRowToBar(row: {

@@ -5,5 +5,6 @@ export * from "./dataSource/postgres.js";
 export * from "./fillSimulation.js";
 export * from "./metrics.js";
 export * from "./baselines.js";
+export * from "./signalFromHistory.js";
 export * from "./replayEngine.js";
 export * from "./fixtures/syntheticFixture.js";

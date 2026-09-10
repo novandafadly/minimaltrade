@@ -11,7 +11,14 @@ describe("runReplayBatch", () => {
     const result = await runReplayBatch({ dataSource, config: DEFAULT_STRATEGY_CONFIG, maxCandidatesPerDay: 3, randomSeed: 1 });
 
     expect(result.tradingDates.length).toBeGreaterThan(0);
-    expect(Object.keys(result.strategies).sort()).toEqual(["random_liquid_universe", "signal_driven", "volume_only_ranking"]);
+    expect(Object.keys(result.strategies).sort()).toEqual([
+      "random_liquid_universe",
+      "signal_driven",
+      "signal_from_history",
+      "volume_only_ranking"
+    ]);
+    // FixtureDataSource has no getBrokerHistoryAsOf -> signal_from_history is empty.
+    expect(result.strategies.signal_from_history.outcomes).toHaveLength(0);
 
     // signal-driven replays exactly the 5 fixture plans (one per symbol, on
     // its own signal day) -- 4 fill (clean_winner/stop_out/gap_down/partial)

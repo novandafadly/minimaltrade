@@ -8,6 +8,7 @@ import {
 import type { ReplayDataSource } from "./dataSource/types.js";
 import { simulateTradePlan, type SimulationOptions, type TradeOutcome } from "./fillSimulation.js";
 import { computeMetrics, segmentMetrics, type ReplayMetrics } from "./metrics.js";
+import { signalFromHistoryStrategy } from "./signalFromHistory.js";
 
 /**
  * Orchestrates a full replay batch (blueprint Phase 6 / §13.2): for each
@@ -16,7 +17,11 @@ import { computeMetrics, segmentMetrics, type ReplayMetrics } from "./metrics.js
  * and aggregate metrics -- including the two named baseline comparisons.
  */
 
-export type StrategyName = "signal_driven" | "random_liquid_universe" | "volume_only_ranking";
+export type StrategyName =
+  | "signal_driven"
+  | "signal_from_history"
+  | "random_liquid_universe"
+  | "volume_only_ranking";
 
 export interface ReplayBatchOptions {
   dataSource: ReplayDataSource;
@@ -77,6 +82,7 @@ export async function runReplayBatch(options: ReplayBatchOptions): Promise<Repla
   );
 
   const signalOutcomes: TradeOutcome[] = [];
+  const signalFromHistoryOutcomes: TradeOutcome[] = [];
   const randomOutcomes: TradeOutcome[] = [];
   const volumeOutcomes: TradeOutcome[] = [];
 
@@ -109,6 +115,22 @@ export async function runReplayBatch(options: ReplayBatchOptions): Promise<Repla
 
     const volumePlans = volumeOnlyRankingStrategy(baseDeps);
     volumeOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, volumePlans)));
+
+    // --- signal-from-history: reconstruct FeatureEngineInput as-of `date`
+    // and run the real scoring engine (only if the data source can serve
+    // historical broker flow). ---
+    if (dataSource.getBrokerHistoryAsOf) {
+      const sfhPlans = await signalFromHistoryStrategy({
+        dataSource,
+        universe,
+        historyBySymbol,
+        tradingDate: date,
+        sessionEndIso: `${date}T08:49:00.000Z`,
+        config,
+        maxCandidates: maxCandidatesPerDay
+      });
+      signalFromHistoryOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, sfhPlans)));
+    }
   }
 
   const toResult = (strategy: StrategyName, outcomes: TradeOutcome[]): StrategyResult => ({
@@ -122,6 +144,7 @@ export async function runReplayBatch(options: ReplayBatchOptions): Promise<Repla
     tradingDates,
     strategies: {
       signal_driven: toResult("signal_driven", signalOutcomes),
+      signal_from_history: toResult("signal_from_history", signalFromHistoryOutcomes),
       random_liquid_universe: toResult("random_liquid_universe", randomOutcomes),
       volume_only_ranking: toResult("volume_only_ranking", volumeOutcomes)
     }
