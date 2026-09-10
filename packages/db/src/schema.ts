@@ -171,7 +171,7 @@ export const signal = pgTable(
     featureSnapshotId: text("feature_snapshot_id").references(() => featureSnapshot.id)
   },
   (t) => ({
-    symbolDateIdx: index("signal_symbol_date_idx").on(t.symbol, t.tradingDate),
+    symbolDateIdx: uniqueIndex("signal_symbol_date_idx").on(t.symbol, t.tradingDate),
     generatedIdx: index("signal_generated_idx").on(t.generatedAt)
   })
 );
@@ -209,7 +209,7 @@ export const tradePlan = pgTable(
     noTradeReason: text("no_trade_reason")
   },
   (t) => ({
-    signalIdx: index("trade_plan_signal_idx").on(t.signalId)
+    signalIdx: uniqueIndex("trade_plan_signal_idx").on(t.signalId)
   })
 );
 

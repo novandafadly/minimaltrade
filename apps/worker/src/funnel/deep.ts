@@ -257,7 +257,7 @@ export async function runDeepFunnel(
       item.feature.dataStale,
       item.feature.segmentMixed
     );
-    const signalId = await insertSignal(db, sig, featureSnapshotId);
+    const signalId = await insertSignal(db, sig, item.score.gates as unknown as object, featureSnapshotId);
     if (plan) {
       await insertTradePlan(db, signalId, plan);
     }
