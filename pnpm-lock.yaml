@@ -90,6 +90,9 @@ importers:
       '@aws-sdk/client-s3':
         specifier: ^3.687.0
         version: 3.1128.0
+      '@idx/backtest':
+        specifier: workspace:*
+        version: link:../../packages/backtest
       '@idx/config':
         specifier: workspace:*
         version: link:../../packages/config

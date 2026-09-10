@@ -18,6 +18,8 @@ import { runMidFunnel } from "./funnel/mid.js";
 import { runDeepFunnel } from "./funnel/deep.js";
 import { computeWorkerHealth, recordScreenerPollSuccess } from "./health.js";
 import { maybePublishCategoryChangeAlert } from "./alerts/index.js";
+import { persistShadowPlans } from "./shadow/persist.js";
+import { evaluateShadowOutcomes } from "./shadow/evaluate.js";
 
 /**
  * Worker scheduler (blueprint §4/§11): a plain `setInterval` loop is enough
@@ -193,6 +195,27 @@ async function maybeRunDeepFunnelOnceToday(
       compositeScore: candidate.signal.compositeScore,
       signalId: candidate.symbol // placeholder id; real signal.id is generated inside insertSignal
     });
+  }
+
+  // --- shadow mode: persist live + baseline plans, then evaluate any that
+  //     now have enough forward daily_bar history (blueprint forward-test). ---
+  try {
+    const sessionEndIso = `${dayBucket}T08:49:00.000Z`;
+    const shadow = await persistShadowPlans({
+      ctx: { env, db },
+      redis,
+      strategyConfig,
+      tradingDate: dayBucket,
+      sessionEndIso,
+      screenerCandidates: screenerResult.candidates,
+      liveSignals: deepResult.activeWatchlist.map((c) => c.signal)
+    });
+    const evalResult = await evaluateShadowOutcomes(db, strategyConfig);
+    console.log(
+      `[shadow] persisted live=${shadow.live} baseline=${shadow.baseline}; evaluated ${evalResult.evaluated} pending outcomes`
+    );
+  } catch (err) {
+    console.error("[shadow] step failed (non-fatal):", err instanceof Error ? err.message : err);
   }
 }
 

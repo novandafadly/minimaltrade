@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.687.0",
+    "@idx/backtest": "workspace:*",
     "@idx/config": "workspace:*",
     "@idx/db": "workspace:*",
     "@idx/domain": "workspace:*",

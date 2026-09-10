@@ -284,3 +284,49 @@ export const sessionCalendarOverride = pgTable("session_calendar_override", {
   isTradingDay: boolean("is_trading_day").notNull(),
   note: text("note")
 });
+
+/**
+ * Shadow-mode plans (blueprint non-goal: forward-test before real capital).
+ * Every EOD the worker writes: a `live` mirror of each real deep-funnel trade
+ * plan, plus `baseline_volume` / `baseline_random` plans over the same
+ * enriched candidate pool. A forward evaluator fills in the outcome columns
+ * once ~3 trading days of `daily_bar` history exist after the plan date.
+ * This is how "does the broker-flow signal beat the baselines?" gets
+ * answered — the question the backtest (Phase 0b) could not reach.
+ */
+export const shadowPlan = pgTable(
+  "shadow_plan",
+  {
+    id: text("id").primaryKey(), // uuid
+    tradingDate: text("trading_date").notNull(), // YYYY-MM-DD
+    symbol: text("symbol").notNull(),
+    source: text("source").notNull(), // live | baseline_volume | baseline_random
+    category: text("category"), // signal category for the `live` source, else null
+    compositeScore: numeric("composite_score", { precision: 6, scale: 2 }),
+    configVersion: text("config_version").notNull(),
+    generatedAt: timestamp("generated_at", { withTimezone: true }).notNull(),
+    expiry: timestamp("expiry", { withTimezone: true }).notNull(),
+    entryTrigger: numeric("entry_trigger", { precision: 14, scale: 2 }).notNull(),
+    maxBuyPrice: numeric("max_buy_price", { precision: 14, scale: 2 }).notNull(),
+    slPrice: numeric("sl_price", { precision: 14, scale: 2 }).notNull(),
+    tp1Price: numeric("tp1_price", { precision: 14, scale: 2 }).notNull(),
+    tp1Lots: integer("tp1_lots").notNull(),
+    tp2Price: numeric("tp2_price", { precision: 14, scale: 2 }).notNull(),
+    tp2Lots: integer("tp2_lots").notNull(),
+    totalLots: integer("total_lots").notNull(),
+    netRewardToRisk: numeric("net_reward_to_risk", { precision: 8, scale: 3 }).notNull(),
+    isNoTrade: boolean("is_no_trade").notNull().default(false),
+    planJson: jsonb("plan_json").notNull(), // full TradePlan from @idx/domain, for the forward simulator
+    // --- outcome (filled forward by the evaluator) ---
+    outcomeStatus: text("outcome_status"), // null=pending | no_fill | filled | partial
+    filledLots: integer("filled_lots"),
+    firstExitReason: text("first_exit_reason"), // tp1 | tp2 | sl | expiry
+    netPnl: numeric("net_pnl", { precision: 16, scale: 2 }),
+    barsHeld: integer("bars_held"),
+    evaluatedAt: timestamp("evaluated_at", { withTimezone: true })
+  },
+  (t) => ({
+    dateSourceSymbolIdx: uniqueIndex("shadow_plan_date_source_symbol_idx").on(t.tradingDate, t.source, t.symbol),
+    pendingIdx: index("shadow_plan_pending_idx").on(t.outcomeStatus, t.tradingDate)
+  })
+);
