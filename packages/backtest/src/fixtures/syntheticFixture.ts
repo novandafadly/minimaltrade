@@ -33,7 +33,7 @@ export const FIXTURE_SESSION_CLOSE_UTC = "T08:49:00.000Z"; // ~15:49 WIB, IDX Fr
  */
 export const FIXTURE_STRATEGY_CONFIG: StrategyConfig = {
   ...DEFAULT_STRATEGY_CONFIG,
-  risk: { ...DEFAULT_STRATEGY_CONFIG.risk, totalCapital: 5_000_000, maxDeployedCapital: 3_000_000 }
+  risk: { ...DEFAULT_STRATEGY_CONFIG.risk, totalCapital: 5_000_000, maxDeployedCapital: 3_000_000, minNetRewardToRisk: 2 }
 };
 
 function preHistory(symbol: string, startDate: string, days: number, basePrice: number, baseVolume: number): OhlcvBar[] {
