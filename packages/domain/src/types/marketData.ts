@@ -134,6 +134,8 @@ export interface MarketCapEntry {
   symbol: string;
   sharesOutstanding: number;
   marketCap: number;
+  close: number | null;
+  turnoverRatio: number | null; // day turnover / market cap (liquidity proxy)
 }
 
 export interface SearchResultEntry {

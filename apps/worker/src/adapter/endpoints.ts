@@ -337,6 +337,26 @@ export async function getMarketCap(
   return { asOf: parsed.date ?? null, totalPages: parsed.total_pages ?? 1, entries };
 }
 
+/**
+ * Whole-universe market cap by walking every page. Used by shadow-mode
+ * screeners (liquidity/size filter + the bounded technical-screen universe).
+ * Bounded by `maxPages` so a mis-reported `total_pages` can't run away with
+ * the daily API budget.
+ */
+export async function getMarketCapAll(
+  ctx: AdapterContext,
+  maxPages = 40
+): Promise<{ asOf: string | null; entries: DataEnvelope<MarketCapEntry>[] }> {
+  const first = await getMarketCap(ctx);
+  const pages = Math.min(first.totalPages, maxPages);
+  const entries = [...first.entries];
+  for (let p = 2; p <= pages; p++) {
+    const next = await getMarketCap(ctx, p);
+    entries.push(...next.entries);
+  }
+  return { asOf: first.asOf, entries };
+}
+
 // ---------------------------------------------------------------------
 // 8. GET /api/search
 // ---------------------------------------------------------------------

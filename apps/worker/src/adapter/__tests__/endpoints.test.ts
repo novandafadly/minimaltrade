@@ -17,6 +17,7 @@ import {
   quoteEnvelopeFromHistory,
   getSeasonal,
   getMarketCap,
+  getMarketCapAll,
   search,
   getHealth,
   getFinancialStatements,
@@ -248,11 +249,22 @@ describe("getMarketCap", () => {
         page: 1,
         per_page: 25,
         total_pages: 39,
-        data: [{ code: "BBCA", name: "Bank Central Asia Tbk.", close: 6525, listed_shares: "122042299500", market_cap: "796326004237500" }]
+        data: [
+          {
+            code: "BBCA",
+            name: "Bank Central Asia Tbk.",
+            close: 6525,
+            listed_shares: "122042299500",
+            market_cap: "796326004237500",
+            turnover_ratio: 0.0012
+          }
+        ]
       });
     const result = await getMarketCap(ctx);
     expect(result.entries[0]?.symbol).toBe("BBCA");
     expect(result.entries[0]?.data.sharesOutstanding).toBe(122_042_299_500);
+    expect(result.entries[0]?.data.close).toBe(6525);
+    expect(result.entries[0]?.data.turnoverRatio).toBeCloseTo(0.0012);
     expect(result.totalPages).toBe(39);
   });
 
@@ -260,6 +272,22 @@ describe("getMarketCap", () => {
     nock(env.ARJUM_API_BASE_URL).get("/api/market-cap").query({ page: "2" }).reply(200, { data: [] });
     const result = await getMarketCap(ctx, 2);
     expect(result.entries).toHaveLength(0);
+  });
+
+  it("getMarketCapAll walks every page up to the cap", async () => {
+    nock(env.ARJUM_API_BASE_URL)
+      .get("/api/market-cap")
+      .reply(200, { total_pages: 3, data: [{ code: "AAA", listed_shares: "1", market_cap: "1" }] });
+    nock(env.ARJUM_API_BASE_URL)
+      .get("/api/market-cap")
+      .query({ page: "2" })
+      .reply(200, { data: [{ code: "BBB", listed_shares: "1", market_cap: "1" }] });
+    nock(env.ARJUM_API_BASE_URL)
+      .get("/api/market-cap")
+      .query({ page: "3" })
+      .reply(200, { data: [{ code: "CCC", listed_shares: "1", market_cap: "1" }] });
+    const { entries } = await getMarketCapAll(ctx);
+    expect(entries.map((e) => e.symbol)).toEqual(["AAA", "BBB", "CCC"]);
   });
 });
 

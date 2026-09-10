@@ -238,7 +238,9 @@ export function normalizeMarketCapEntries(resp: MarketCapResponse): MarketCapEnt
   return resp.data.map((e) => ({
     symbol: e.code,
     sharesOutstanding: num(e.listed_shares),
-    marketCap: num(e.market_cap)
+    marketCap: num(e.market_cap),
+    close: numOrNull(e.close),
+    turnoverRatio: numOrNull(e.turnover_ratio)
   }));
 }
 

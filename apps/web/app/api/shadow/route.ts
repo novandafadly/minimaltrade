@@ -70,7 +70,7 @@ export async function GET() {
     }
     stats.sort((a, b) => a.source.localeCompare(b.source));
 
-    const recent = rows.slice(0, 60).map((r) => ({
+    const recent = rows.slice(0, 120).map((r) => ({
       tradingDate: r.tradingDate,
       symbol: r.symbol,
       source: r.source,
