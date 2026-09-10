@@ -12,3 +12,7 @@ coverage/
 /apps/web/.next/
 /apps/worker/dist/
 /packages/*/dist/
+
+# backtest CLI output
+replay-report.json
+*.replay.json

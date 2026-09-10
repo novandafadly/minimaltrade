@@ -178,7 +178,8 @@ export const marketCapEntrySchema = z.object({
   name: z.string().optional(),
   close: nullableNumeric,
   listed_shares: numeric,
-  market_cap: numeric
+  market_cap: numeric,
+  turnover_ratio: nullableNumeric // day turnover / market cap
 });
 
 export const marketCapResponseSchema = z.object({

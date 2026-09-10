@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "test": "vitest run",
-    "replay": "tsx src/cli.ts"
+    "replay": "tsx src/cli.ts",
+    "backfill": "tsx src/backfill.ts"
   },
   "dependencies": {
     "@idx/config": "workspace:*",
