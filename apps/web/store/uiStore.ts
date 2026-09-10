@@ -5,7 +5,7 @@ import type { SignalCategory } from "@idx/domain";
 
 export type SortKey = "score" | "generatedAt" | "netRR" | "symbol";
 export type SortDirection = "asc" | "desc";
-export type DashboardView = "trigger" | "journal";
+export type DashboardView = "trigger" | "journal" | "shadow";
 
 interface UiState {
   view: DashboardView;

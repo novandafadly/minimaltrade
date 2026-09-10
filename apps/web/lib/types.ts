@@ -149,3 +149,42 @@ export interface PaperTradeView {
   openedAt: string;
   closedAt: string | null;
 }
+
+export interface ShadowSourceStats {
+  source: string;
+  plans: number;
+  pending: number;
+  evaluated: number;
+  fills: number;
+  fillRate: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  netPnl: number;
+  expectancy: number;
+  profitFactor: number;
+}
+
+export interface ShadowRecentRow {
+  tradingDate: string;
+  symbol: string;
+  source: string;
+  category: string | null;
+  compositeScore: number | null;
+  entryTrigger: number;
+  slPrice: number;
+  tp1Price: number;
+  totalLots: number;
+  netRewardToRisk: number;
+  isNoTrade: boolean;
+  outcomeStatus: string | null;
+  firstExitReason: string | null;
+  netPnl: number | null;
+  barsHeld: number | null;
+}
+
+export interface ShadowResponse {
+  stats: ShadowSourceStats[];
+  recent: ShadowRecentRow[];
+  generatedAt: string;
+}

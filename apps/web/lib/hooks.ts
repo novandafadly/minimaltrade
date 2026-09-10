@@ -162,3 +162,11 @@ export function useSseSignalStream(options?: { windowMs?: number }) {
 }
 
 export type { SseEnvelope };
+
+export function useShadow() {
+  return useQuery({
+    queryKey: ["shadow"],
+    queryFn: () => fetchJson<import("./types").ShadowResponse>("/api/shadow"),
+    refetchInterval: 60_000
+  });
+}
