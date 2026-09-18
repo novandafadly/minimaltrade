@@ -1,14 +1,27 @@
 version: "3.9"
 
+name: minimaltrade-app
+
 # Runs on the APP VM only. worker + web, stateless (all state lives on the
 # DB VM via DATABASE_URL/REDIS_URL in .env). This is the file CI/CD redeploys
 # on every push to main (see .github/workflows/ci.yml's `deploy` job).
+#
+# `name:` + `container_name:` below exist because this VM hosts several
+# unrelated apps' compose stacks side by side. Without an explicit project
+# name, Compose derives one from this file's containing directory
+# ("infra/docker" -> project "docker") -- generic enough that another app's
+# compose file under its own "docker/" subfolder resolves to the SAME
+# project name, so `docker compose down` run for THAT app matches and tears
+# down THIS stack too. See docker-compose.db.yml for the incident this
+# caused. Pinning names makes both stacks unambiguous regardless of what
+# else runs on the host.
 
 services:
   worker:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.worker
+    container_name: minimaltrade-worker
     restart: unless-stopped
     env_file: .env
 
@@ -16,6 +29,7 @@ services:
     build:
       context: ../..
       dockerfile: infra/docker/Dockerfile.web
+    container_name: minimaltrade-web
     restart: unless-stopped
     env_file: .env
     ports:
