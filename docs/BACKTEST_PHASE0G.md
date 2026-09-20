@@ -108,3 +108,30 @@ almost nothing about edge.
   on the fill bar itself is ignored (optimistic; small — the stop is a 5-day low).
 - Daily bars only; intraday sequencing is unknowable, same-bar SL/TP resolved SL-first.
 - One window / one regime (see above).
+
+## Phase 0D re-run with an honest entry
+
+Same script (`phase0d.ts`), same data (now 127 dates, 2026-03-05 → 2026-09-18, refreshed
+universe), 5 picks/day, 20-bar hold, only the entry convention changed:
+
+| strategy | entry = sameBar (legacy) | | entry = nextSession (honest) | |
+|---|---:|---:|---:|---:|
+| | expectancy Rp/trade | PF | expectancy Rp/trade | PF |
+| technical | +5,080 | 1.79 | **−3,512** | **0.72** |
+| volume | +2,610 | 1.25 | −5,979 | 0.62 |
+| random | +7,934 | 1.98 | −3,997 | 0.74 |
+
+With the look-ahead removed **all three lose money after costs** (win rate 31–34%),
+and the technical screen is **indistinguishable from random** (PF 0.72 vs 0.74;
+expectancy −Rp3.5k vs −Rp4.0k). It is only slightly better than volume-ranking
+(PF 0.62). Its lower drawdown (Rp265k vs Rp1.02M for random) comes with a lower
+fill rate (63% vs 68%) and a still-negative expectancy, so it is not evidence of
+skill. Phase 0D's published claim that the technical screen "beats random" is
+retracted. (The legacy column is not identical to the numbers first published in
+Phase 0D because the window and universe have since been extended.)
+
+Note the honest 0D random row (PF 0.74) is worse than the Phase 0G random row
+(+0.42%/trade, PF 1.10): different window (0G: Apr–Sep, 85 dates, 10-bar hold,
+25 picks/day from the whole liquid universe; 0D: Mar–Sep, 20-bar hold, picks from
+the top-40 by volume). Both are statistically ≈ 0 and swing sign with the window —
+the regime point above.
