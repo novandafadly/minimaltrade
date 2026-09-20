@@ -24,7 +24,7 @@ import { setTimeout as sleep } from "node:timers/promises";
  * resumable (an (endpoint, symbol) archived OK within `--fresh-days` is skipped).
  *
  *   pnpm --filter @idx/backtest exec tsx src/backfillFundamentals.ts -- \
- *     [--symbols=all|N|A,B,C] [--kinds=income,balance,cashflow,weekly] \
+ *     [--symbols=all|N|A,B,C] [--kinds=income,balance,cashflow,weekly,insiders,seasonal] \
  *     [--max-requests=900] [--min-remaining=500] [--dry-run]
  */
 
@@ -44,6 +44,15 @@ const KINDS: Record<string, (code: string) => { endpoint: string; url: string }>
   weekly: (c) => ({
     endpoint: `/api/history/{code}?frame=weekly`,
     url: `/api/history/${encodeURIComponent(c)}?frame=weekly`
+  }),
+  // insider transactions (dated) -- insider buying is a documented return predictor
+  insiders: (c) => ({
+    endpoint: `/api/insiders/{code}`,
+    url: `/api/insiders/${encodeURIComponent(c)}`
+  }),
+  seasonal: (c) => ({
+    endpoint: `/api/seasonal/{code}`,
+    url: `/api/seasonal/${encodeURIComponent(c)}`
   })
 };
 
@@ -71,7 +80,7 @@ function parseArgs(argv: string[]): Args {
   if (!databaseUrl) throw new Error("DATABASE_URL (or --database-url=) is required");
   if (!apiKey && !dryRun) throw new Error("ARJUM_API_KEY (or --api-key=) is required");
   const kinds = (get("kinds") ?? "income,balance,cashflow,weekly").split(",").map((s) => s.trim());
-  for (const k of kinds) if (!KINDS[k]) throw new Error(`unknown kind "${k}" (income|balance|cashflow|weekly)`);
+  for (const k of kinds) if (!KINDS[k]) throw new Error(`unknown kind "${k}" (income|balance|cashflow|weekly|insiders|seasonal)`);
   return {
     databaseUrl,
     apiKey,
