@@ -51,6 +51,21 @@ const PUBLICATION_LAG_DAYS = 90;
 const HORIZONS = [4, 13];
 const MIN_XS = Number(get("min-xs") ?? 15);
 const SPLIT_KS = [2, 3, 4, 5, 8, 10, 20, 25, 50, 100];
+// Robustness options (defaults reproduce the original run):
+//   --min-daily-turnover=Rp  point-in-time liquidity: mean weekly close*volume of the 8 weeks up to the
+//                            signal week, divided by 5 sessions (removes names that were illiquid THEN)
+//   --from= / --to=          restrict rebalance dates (half-sample stability)
+//   --median                 quintile means -> medians (outlier-robust)
+const MIN_DAILY_TURNOVER = Number(get("min-daily-turnover") ?? 0);
+const FROM = get("from") ?? "2024-07-01";
+const TO = get("to") ?? "9999-12-31";
+const USE_MEDIAN = process.argv.includes("--median");
+const median = (xs: number[]) => {
+  if (!xs.length) return NaN;
+  const s = [...xs].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+};
 
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
 function sd(xs: number[]): number {
@@ -249,7 +264,7 @@ async function main() {
   const rebalance: string[] = [];
   let lastMonth = "";
   for (const d of allDates) {
-    if (d < "2024-07-01") continue;
+    if (d < FROM || d > TO) continue;
     const mth = d.slice(0, 7);
     if (mth !== lastMonth) {
       rebalance.push(d);
@@ -275,6 +290,11 @@ async function main() {
       const bars = weekly.get(sym)!;
       const i = bars.findIndex((b) => b.date === t);
       if (i < 0) continue;
+      if (MIN_DAILY_TURNOVER > 0) {
+        if (i < 7) continue;
+        const liq = mean(bars.slice(i - 7, i + 1).map((b) => b.close * b.volume)) / 5;
+        if (!(liq >= MIN_DAILY_TURNOVER)) continue;
+      }
       const qs = quarters.get(sym)!;
       // latest quarter whose statements are public by t
       let L = -1;
@@ -338,8 +358,7 @@ async function main() {
       const perH: Record<string, unknown> = {};
       for (const h of HORIZONS) {
         const ics: number[] = [];
-        const qSum = [0, 0, 0, 0, 0];
-        const qN = [0, 0, 0, 0, 0];
+        const qArr: number[][] = [[], [], [], [], []];
         let nObs = 0;
         for (const t of rebalance) {
           const all = obs.filter((o) => o.date === t && o.fwd[h] !== undefined && filter(o));
@@ -354,13 +373,12 @@ async function main() {
           const rk = ranks(sig);
           rows.forEach((_, k) => {
             const q = Math.min(4, Math.floor(((rk[k]! - 1) / rows.length) * 5));
-            qSum[q]! += excess[k]!;
-            qN[q]! += 1;
+            qArr[q]!.push(excess[k]!);
           });
         }
         const stride = h >= 13 ? 3 : 1;
         const strided = ics.filter((_, k) => k % stride === 0);
-        const q = qSum.map((s, k) => (qN[k]! > 0 ? (s / qN[k]!) * 100 : NaN));
+        const q = qArr.map((xs) => (xs.length > 0 ? (USE_MEDIAN ? median(xs) : mean(xs)) * 100 : NaN));
         perH[`h${h}w`] = {
           obs: nObs,
           dates: ics.length,

@@ -18,8 +18,8 @@
  *            `screener_flow`.) Only where a full-book day is stored.
  *   QUALITY  trailing-4-quarter net income > 0 AND operating cash flow > 0, using only
  *            statements public by the as-of date (quarter end + 90 days)
- *            (hygiene filter: profitability is a robust factor in Indonesia per the
- *             literature; NOT tested here yet -- Phase 0I is running)
+ *            (hygiene filter only: Phase 0I found NO support for profitability as a predictor; the
+ *             binary flag itself was not tested directly)
  *
  * The order is by number of flags met, NOT by expected return. Position numbers come from
  * the real risk engine (5-day-low stop, Rp3.8M capital) so the size/stop are realistic.
