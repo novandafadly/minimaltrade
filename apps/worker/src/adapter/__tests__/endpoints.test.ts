@@ -162,6 +162,20 @@ describe("getBrokerSummary (unchanged shape — VERIFIED)", () => {
     expect(envelope.status).toBe("final");
   });
 
+  it("accepts one-sided price levels sent as explicit null (thin days) instead of skipping the symbol", async () => {
+    nock(env.ARJUM_API_BASE_URL)
+      .get("/api/broker-summary/BBCA")
+      .reply(200, {
+        ...validPayload,
+        broker_levels: [
+          { buy: { broker_code: "YP", bval: 950_000_000, bvol: 100_000, bavg: 9500 }, sell: null },
+          { buy: null, sell: { broker_code: "ZP", sval: 190_000_000, svol: 20_000, savg: 9500 } }
+        ]
+      });
+    const envelope = await getBrokerSummary(ctx, "BBCA");
+    expect(envelope.data.brokers).toHaveLength(1);
+  });
+
   it("rejects a payload missing broker_end_date", async () => {
     nock(env.ARJUM_API_BASE_URL)
       .get("/api/broker-summary/BBCA")

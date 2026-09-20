@@ -93,9 +93,13 @@ export const brokerLevelSideSchema = z.object({
   savg: numeric.optional()
 });
 
+// A price level can have only one side; on thin days the API sends the empty
+// side as an explicit `null` (not an absent key). `.nullish()` accepts both --
+// with `.optional()` alone the whole broker-summary response failed to parse
+// and that symbol was silently skipped by the deep funnel.
 export const brokerLevelSchema = z.object({
-  buy: brokerLevelSideSchema.optional(),
-  sell: brokerLevelSideSchema.optional()
+  buy: brokerLevelSideSchema.nullish(),
+  sell: brokerLevelSideSchema.nullish()
 });
 
 export const brokerSummaryResponseSchema = z.object({
