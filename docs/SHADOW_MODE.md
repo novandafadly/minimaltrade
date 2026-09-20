@@ -1,11 +1,16 @@
 # Shadow mode
 
-**The question backtesting could not answer** (Phase 0b): does the broker-flow
-composite score actually pick better trades than ranking the same candidates
-by volume, or picking at random? The historical broker feed
-(`/api/broker-accumulation`, ~5 brokers/day) is too sparse to reconstruct the
-scoring engine's concentration inputs. Live `/api/broker-summary` gives the
-full book — so this can only be answered **forward**.
+**What shadow mode is for.** Forward-test, with real trade plans and costs,
+the selection ideas that a backtest can only partly answer: does a screener
+pick better than ranking the same candidates by volume, or at random?
+
+History of this document: Phase 0B originally concluded the broker-flow score
+"could only be answered forward" because `/api/broker-accumulation` is sparse.
+That was wrong -- `/api/broker-summary?start_date=&end_date=` returns full daily
+books back to 2020 (see docs/BACKTEST_PHASE0E.md), and Phase 0E found the
+composite score has no predictive power. Shadow mode is therefore now the
+*forward confirmation* of the historical results (screener_technical from
+Phase 0D, screener_flow from Phase 0E), not the only way to test the score.
 
 ## How it works
 
@@ -17,6 +22,7 @@ Every EOD, right after the deep funnel, the worker writes to `shadow_plan`:
 | `screener_arjum` | top-N ARJUM `/api/screener/latest` shortlist by ARJUM's own edge (`wr_event × potential`) | `buildRiskPlan` off OHLCV only (entry = close, stop = 5-day low) |
 | `screener_marketcap` | ARJUM shortlist ∩ a liquidity/size band (`turnover_ratio ≥ 0.2%`, market cap Rp 300bn–50tn) — **option B** | same |
 | `screener_technical` | liquid momentum-breakout screen (close > SMA20 > SMA50, within 3% of the 20-bar high, positive 20-bar return) over the 60 most liquid names from `/api/market-cap` — **option D** | same |
+| `screener_flow` | top-N of the same 60-name technical universe by **broker net-flow imbalance** (Σ net value / Σ buy value of the day's top-20 broker book), positive only. Not part of the engine score — the Phase 0E lead (rank-IC +0.06…+0.09 at 1/3/5/10d, docs/BACKTEST_PHASE0E.md); tracked forward to see if it survives costs + a real trade plan. ~60 extra `/api/broker-summary` requests/day (24h cache, shared with the deep funnel). | same |
 | `screener_consensus` | names ≥ 2 of the three screeners above agree on — **ensemble** | same |
 | `baseline_volume` | top-N of the ARJUM pool by latest-bar volume | same |
 | `baseline_random` | N seeded-random picks of the ARJUM pool | same |
