@@ -76,8 +76,9 @@ almost nothing about edge.
 ## What this changes
 
 1. **Random picks through the risk engine are not net positive** once entry is
-   honest (≈ 0 before costs' significance, negative at next-open). Phase 0A/0C's
-   "the framework is net positive" is retracted.
+   honest: statistically zero with a limit entry (+0.42%/trade, t 0.68) and slightly
+   negative buying the next open (−0.26%). Phase 0A/0C's "the framework is net
+   positive" is retracted.
 2. **Phase 0D's "technical beats random" is unsupported as published** (see the
    re-run below). Its picks are chosen from names that closed strongly on day D,
    which is exactly where the look-ahead gain is largest.
