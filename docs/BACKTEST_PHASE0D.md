@@ -1,5 +1,13 @@
 # Backtest Phase 0D — technical screener vs baselines
 
+> **⚠ ERRATUM (2026-09-21):** the fill/exit simulation behind the P&L, expectancy and
+> profit-factor numbers in this document filled each plan on the bar of its **own**
+> trading date at `min(open, close)` — a look-ahead (plans are built from that
+> day's close). With an honest next-session entry, random liquid picks are ≈ 0
+> (not net positive). See [BACKTEST_PHASE0G.md](BACKTEST_PHASE0G.md) for the
+> measurement and corrected numbers. Conclusions below that rely on "net positive"
+> are **not supported**.
+
 **Question:** the technical screen added to shadow mode
 (`apps/worker/src/shadow/screeners.ts`) needs only OHLCV, so unlike the
 ARJUM-shortlist / broker-flow paths it *can* be replayed over history. Does a

@@ -1,5 +1,13 @@
 # Backtest — Phase 0c: risk-engine parameter sweep
 
+> **⚠ ERRATUM (2026-09-21):** the fill/exit simulation behind the P&L, expectancy and
+> profit-factor numbers in this document filled each plan on the bar of its **own**
+> trading date at `min(open, close)` — a look-ahead (plans are built from that
+> day's close). With an honest next-session entry, random liquid picks are ≈ 0
+> (not net positive). See [BACKTEST_PHASE0G.md](BACKTEST_PHASE0G.md) for the
+> measurement and corrected numbers. Conclusions below that rely on "net positive"
+> are **not supported**.
+
 **Goal:** Phase 0b found `NET_RR_MIN` fails for 74–86% of candidates. This
 sweeps `minNetRewardToRisk` × preliminary-stop method over the backfilled
 120-day window (`pnpm --filter @idx/backtest exec tsx src/paramSweep.ts`),
