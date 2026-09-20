@@ -29,7 +29,8 @@ import { brokerSummaryResponseSchema } from "@idx/domain";
  *
  *   pnpm --filter @idx/backtest exec tsx src/backfillBrokerSummary.ts -- \
  *     --symbols=20 --days=40 --max-requests=500 [--dry-run]
- *   (or --symbols=BBCA,DPUM,NIKL for an explicit list)
+ *   (or --symbols=BBCA,DPUM,NIKL for an explicit list; --include=DPUM,NIKL,SMLE
+ *   adds extras on top of a top-N selection)
  */
 
 interface Args {
@@ -37,6 +38,7 @@ interface Args {
   apiBase: string;
   apiKey: string;
   symbols: string; // count or comma list
+  include: string[]; // always-included extras on top of a top-N selection
   days: number;
   maxRequests: number;
   minRemaining: number;
@@ -61,6 +63,7 @@ function parseArgs(argv: string[]): Args {
     apiKey,
     apiBase: (get("api-base") ?? process.env.ARJUM_API_BASE_URL ?? "https://stock.arjum.com").replace(/\/$/, ""),
     symbols: get("symbols") ?? "20",
+    include: (get("include") ?? "").split(",").map((x) => x.trim().toUpperCase()).filter(Boolean),
     days: Number(get("days") ?? 40),
     maxRequests: Number(get("max-requests") ?? 500),
     minRemaining: Number(get("min-remaining") ?? 300),
@@ -103,6 +106,8 @@ async function main(): Promise<void> {
   } else {
     symbols = a.symbols.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
   }
+
+  symbols = [...new Set([...symbols, ...a.include])];
 
   // 3. what's already a full book? (>= 12 rows for the symbol-day)
   const doneRows = rowsOf(
