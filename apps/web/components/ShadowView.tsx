@@ -9,6 +9,7 @@ const SOURCE_LABEL: Record<string, string> = {
   screener_arjum: "Screener — ARJUM shortlist",
   screener_marketcap: "Screener — ARJUM ∩ liquidity/size",
   screener_technical: "Screener — technical breakout",
+  screener_flow: "Screener — broker net-flow imbalance",
   screener_consensus: "Screener — consensus (≥2 agree)",
   baseline_volume: "Baseline — volume rank",
   baseline_random: "Baseline — random"
@@ -20,6 +21,7 @@ const SOURCE_ORDER = [
   "screener_arjum",
   "screener_marketcap",
   "screener_technical",
+  "screener_flow",
   "baseline_volume",
   "baseline_random"
 ];
@@ -103,9 +105,9 @@ export function ShadowView() {
       <p className="shadow-intro">
         Every EOD the engine records a plan for each <strong>source</strong> over the same forward
         window: the <strong>live</strong> signal (ARJUM shortlist + full feature/scoring/risk engine),
-        four candidate <strong>screeners</strong> (ARJUM raw, ARJUM ∩ liquidity/size, a technical
-        breakout screen, and their consensus), and two dumb <strong>baselines</strong> (volume rank,
-        random). Every non-live plan is built the same way — off OHLCV with a 5-day-low stop — so this
+        five candidate <strong>screeners</strong> (ARJUM raw, ARJUM ∩ liquidity/size, a technical
+        breakout screen, broker net-flow imbalance, and their consensus), and two dumb{" "}
+        <strong>baselines</strong> (volume rank, random). Every non-live plan is built the same way — off OHLCV with a 5-day-low stop — so this
         isolates <em>which shortlist</em> works from <em>whether the score works</em>. Outcomes are
         simulated once ~3 trading days of price history pass.
       </p>

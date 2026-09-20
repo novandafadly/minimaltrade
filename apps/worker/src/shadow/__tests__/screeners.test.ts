@@ -1,9 +1,11 @@
 import { describe, it, expect } from "vitest";
-import type { HistoryData, MarketCapEntry, OhlcvBar, ScreenerSignalRow } from "@idx/domain";
+import type { BrokerSummaryData, HistoryData, MarketCapEntry, OhlcvBar, ScreenerSignalRow } from "@idx/domain";
 import {
   arjumShortlist,
   consensusShortlist,
+  flowShortlist,
   marketcapShortlist,
+  netFlowImbalance,
   technicalShortlist,
   technicalUniverse
 } from "../screeners.js";
@@ -89,5 +91,41 @@ describe("shadow screeners", () => {
         ["C", "E"]
       ])
     ).toEqual(["C", "B"]);
+  });
+
+  it("netFlowImbalance = sum(net value) / sum(buy value) over the book", () => {
+    const book = {
+      symbol: "X",
+      segment: "regular",
+      totalVolume: 0,
+      totalValue: 0,
+      brokers: [
+        { brokerCode: "A", buyVolume: 0, buyValue: 800, sellVolume: 0, sellValue: 200, netVolume: 0, netValue: 600, avgBuyPrice: null, avgSellPrice: null },
+        { brokerCode: "B", buyVolume: 0, buyValue: 200, sellVolume: 0, sellValue: 800, netVolume: 0, netValue: -600, avgBuyPrice: null, avgSellPrice: null },
+        { brokerCode: "C", buyVolume: 0, buyValue: 500, sellVolume: 0, sellValue: 100, netVolume: 0, netValue: 400, avgBuyPrice: null, avgSellPrice: null }
+      ]
+    } as unknown as BrokerSummaryData;
+    expect(netFlowImbalance(book)).toBeCloseTo(400 / 1500, 6);
+    expect(netFlowImbalance({ ...book, brokers: [] })).toBeNull();
+  });
+
+  it("flowShortlist keeps only positive imbalance, highest first, and needs history", () => {
+    const h = new Map([
+      ["A", history("A", uptrend)],
+      ["B", history("B", uptrend)],
+      ["C", history("C", uptrend)]
+      // D has no history
+    ]);
+    const out = flowShortlist(
+      [
+        { symbol: "A", imbalance: 0.05 },
+        { symbol: "B", imbalance: 0.4 },
+        { symbol: "C", imbalance: -0.2 }, // net selling -> excluded
+        { symbol: "D", imbalance: 0.9 }, // no history -> excluded
+        { symbol: "E", imbalance: null }
+      ],
+      h
+    );
+    expect(out).toEqual(["B", "A"]);
   });
 });

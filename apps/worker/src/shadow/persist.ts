@@ -7,12 +7,14 @@ import type { DataEnvelope, HistoryData, MarketCapEntry, ScreenerSignalRow, Sign
 import { planFromHistory, mulberry32 } from "@idx/backtest";
 import { getOrFetch } from "../cache/cache.js";
 import { CACHE_TTL_SECONDS } from "../cache/ttl.js";
-import { getHistory, type AdapterContext } from "../adapter/endpoints.js";
+import { getBrokerSummary, getHistory, type AdapterContext } from "../adapter/endpoints.js";
 import {
   arjumShortlist,
   consensusShortlist,
+  flowShortlist,
   hasEnoughHistory,
   marketcapShortlist,
+  netFlowImbalance,
   technicalShortlist,
   technicalUniverse
 } from "./screeners.js";
@@ -29,6 +31,8 @@ import {
  *  - `screener_arjum`    — top-N ARJUM shortlist by ARJUM's own edge
  *  - `screener_marketcap`— ARJUM ∩ liquidity/size band (option B)
  *  - `screener_technical`— liquid momentum-breakout screen (option D)
+ *  - `screener_flow`     — top of the technical universe by broker net-flow
+ *                          imbalance (Phase 0E lead; see screeners.ts)
  *  - `screener_consensus`— names ≥2 screeners agree on (ensemble)
  *
  * Every source's plan (except `live`) is built the SAME way — `planFromHistory`
@@ -44,6 +48,7 @@ type ShadowSource =
   | "screener_arjum"
   | "screener_marketcap"
   | "screener_technical"
+  | "screener_flow"
   | "screener_consensus";
 
 function hashDate(date: string): number {
@@ -149,6 +154,21 @@ export async function persistShadowPlans(opts: PersistShadowOpts): Promise<Persi
     }
   }
 
+  // Broker net-flow imbalance over the technical universe. Same cache key the
+  // deep funnel uses, so its candidates cost nothing; the rest is <= ~60
+  // requests/day (24h TTL). A symbol whose book can't be fetched is skipped.
+  const flowScores: { symbol: string; imbalance: number | null }[] = [];
+  for (const sym of techUniverse) {
+    try {
+      const { value } = await getOrFetch(redis, "brokerSummary", sym, CACHE_TTL_SECONDS.brokerSummary, () =>
+        getBrokerSummary(ctx, sym, true)
+      );
+      flowScores.push({ symbol: sym, imbalance: netFlowImbalance(value.data) });
+    } catch {
+      // skip
+    }
+  }
+
   const arjumPool = arjumRows.map((r) => r.symbol).filter((s) => hasEnoughHistory(histories.get(s)));
 
   const lastVol = (s: string) => {
@@ -163,6 +183,7 @@ export async function persistShadowPlans(opts: PersistShadowOpts): Promise<Persi
     screener_arjum: arjumShortlist(arjumRows, histories),
     screener_marketcap: marketcapShortlist(arjumRows, mcapBySymbol, histories),
     screener_technical: technicalShortlist(histories, techUniverse),
+    screener_flow: flowShortlist(flowScores, histories),
     screener_consensus: []
   };
   picksBySource.screener_consensus = consensusShortlist([

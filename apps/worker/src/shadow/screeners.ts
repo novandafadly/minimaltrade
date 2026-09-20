@@ -1,4 +1,4 @@
-import type { HistoryData, MarketCapEntry, OhlcvBar, ScreenerSignalRow } from "@idx/domain";
+import type { BrokerSummaryData, HistoryData, MarketCapEntry, OhlcvBar, ScreenerSignalRow } from "@idx/domain";
 import {
   CONSENSUS_MIN_AGREEMENT,
   MCAP_MAX_MARKET_CAP,
@@ -23,6 +23,7 @@ import {
  *   marketcap  — arjum ∩ a liquidity/size band (option B)
  *   technical  — a classic liquid-momentum-breakout screen over a bounded
  *                universe of the most liquid names (option D)
+ *   flow       — top of the technical universe by net-flow imbalance (below)
  *   consensus  — symbols that ≥2 of the above agree on (ensemble)
  */
 
@@ -147,4 +148,31 @@ export function consensusShortlist(shortlists: string[][]): string[] {
     .sort((a, b) => b[1] - a[1])
     .slice(0, N)
     .map(([sym]) => sym);
+}
+
+/**
+ * Net-flow imbalance of one day's broker book: Σ net value / Σ buy value over
+ * the (top-20) brokers. Positive = the listed brokers bought more than they
+ * sold. NOT part of the engine's composite score -- Phase 0E found that score
+ * has no predictive power, while this simple ratio had a small, consistently
+ * positive rank-IC (0.06-0.09) at 1/3/5/10 day horizons. Tracked forward here
+ * to see whether that lead survives costs and a real trade plan.
+ */
+export function netFlowImbalance(book: BrokerSummaryData): number | null {
+  const buy = book.brokers.reduce((s, b) => s + b.buyValue, 0);
+  if (!(buy > 0)) return null;
+  return book.brokers.reduce((s, b) => s + b.netValue, 0) / buy;
+}
+
+/** Highest positive net-flow imbalance first; needs enough OHLCV for a plan. */
+export function flowShortlist(
+  scores: { symbol: string; imbalance: number | null }[],
+  histories: Map<string, HistoryData>
+): string[] {
+  return scores
+    .filter((r): r is { symbol: string; imbalance: number } => r.imbalance !== null && r.imbalance > 0)
+    .filter((r) => hasEnoughHistory(histories.get(r.symbol)))
+    .sort((a, b) => b.imbalance - a.imbalance)
+    .slice(0, N)
+    .map((r) => r.symbol);
 }
