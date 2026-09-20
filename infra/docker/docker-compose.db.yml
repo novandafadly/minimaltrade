@@ -1,5 +1,7 @@
 version: "3.9"
 
+name: minimaltrade-db
+
 # Runs on the DB VM only. Postgres + Redis, both persisted, both bound to
 # the VM's PRIVATE interface -- never the public one. This file is applied
 # once during initial server setup and touched again only for deliberate
@@ -10,19 +12,34 @@ version: "3.9"
 # DB_VM_PRIVATE_IP must be set in this directory's .env (see README's OCI
 # deployment section). Binding to that specific IP -- not 0.0.0.0 -- matters
 # because Docker manipulates iptables directly and is well known to bypass
-# ufw/firewalld rules; relying on the host firewall alone to keep 5432/6379
-# off the public interface is not sufficient.
+# ufw/firewalld rules; relying on the host firewall alone to keep the DB
+# ports off the public interface is not sufficient.
+#
+# DB_POSTGRES_PORT defaults to 5435, not Postgres's usual 5432 -- on the
+# current DB VM, 5432 and 5434 are already used by other apps' Postgres
+# containers. Override in .env if a fresh DB VM needs a different port.
+#
+# `name:` + `container_name:` below exist because this VM hosts several
+# unrelated apps' compose stacks side by side. Without an explicit project
+# name, Compose derives one from this file's containing directory
+# ("infra/docker" -> project "docker") -- generic enough that another app's
+# compose file living under its own "docker/" subfolder resolves to the SAME
+# project name. A `docker compose down` run for THAT app then matches and
+# tears down THIS stack instead (this happened 2026-09-10..18, an 8-day
+# outage caused by exactly this). Pinning name/container_name/volume names
+# makes this stack unambiguous regardless of what else runs on the host.
 
 services:
   postgres:
     image: postgres:16-alpine
+    container_name: minimaltrade-postgres
     restart: unless-stopped
     environment:
       POSTGRES_USER: idx
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
       POSTGRES_DB: idx_smart_money
     ports:
-      - "${DB_VM_PRIVATE_IP:?}:5432:5432"
+      - "${DB_VM_PRIVATE_IP:?}:${DB_POSTGRES_PORT:-5435}:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -33,6 +50,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    container_name: minimaltrade-redis
     restart: unless-stopped
     command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:?}
     ports:
@@ -46,5 +64,10 @@ services:
       retries: 10
 
 volumes:
+  # Pinned to the volume names Compose already created under the OLD
+  # ("docker") project name, so this rename does NOT create fresh empty
+  # volumes -- the existing data is kept.
   postgres-data:
+    name: docker_postgres-data
   redis-data:
+    name: docker_redis-data
