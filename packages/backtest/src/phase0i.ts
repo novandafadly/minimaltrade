@@ -42,15 +42,16 @@
  */
 import { mulberry32 } from "./baselines.js";
 
-const PUBLICATION_LAG_DAYS = 90;
-const HORIZONS = [4, 13];
-const MIN_XS = 15;
-const SPLIT_JUMP = 0.45;
-
 function get(flag: string): string | undefined {
   const hit = process.argv.find((a) => a.startsWith(`--${flag}=`));
   return hit ? hit.slice(flag.length + 3) : undefined;
 }
+
+const PUBLICATION_LAG_DAYS = 90;
+const HORIZONS = [4, 13];
+const MIN_XS = Number(get("min-xs") ?? 15);
+const SPLIT_KS = [2, 3, 4, 5, 8, 10, 20, 25, 50, 100];
+
 const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : NaN);
 function sd(xs: number[]): number {
   if (xs.length < 2) return NaN;
@@ -126,6 +127,23 @@ function qEndDate(year: number, quarter: number): Date {
 interface WeeklyBar {
   date: string;
   close: number;
+  volume: number;
+}
+
+/**
+ * A real split / reverse split moves the price by ~1/k (k an integer) AND the volume
+ * by ~k in the same week. A plain "hot stock" move (IDX allows +-35%/day) does not.
+ * Large ordinary weekly moves are therefore kept, not dropped.
+ */
+function looksLikeSplit(prev: WeeklyBar, cur: WeeklyBar): boolean {
+  const r = cur.close / prev.close;
+  const v = prev.volume > 0 ? cur.volume / prev.volume : 1;
+  const near = (x: number, k: number) => Math.abs(x / k - 1) <= 0.08;
+  for (const k of SPLIT_KS) {
+    if (near(1 / r, k) && v >= 0.6 * k) return true; // split: price / k, volume * k
+    if (near(r, k) && v <= 1 / (0.6 * k)) return true; // reverse split
+  }
+  return false;
 }
 
 async function main() {
@@ -154,7 +172,11 @@ async function main() {
     const payload = r.payload;
     if (endpoint.includes("frame=weekly")) {
       const bars: WeeklyBar[] = (payload.rows ?? [])
-        .map((x: { date: string; close: number | string }) => ({ date: String(x.date), close: Number(x.close) }))
+        .map((x: { date: string; close: number | string; volume?: number | string }) => ({
+          date: String(x.date),
+          close: Number(x.close),
+          volume: Number(x.volume ?? 0)
+        }))
         .filter((b: WeeklyBar) => Number.isFinite(b.close) && b.close > 0)
         .sort((a: WeeklyBar, b: WeeklyBar) => a.date.localeCompare(b.date));
       weekly.set(sym, bars);
@@ -213,7 +235,7 @@ async function main() {
       continue;
     }
     let jump = false;
-    for (let i = 1; i < bars.length; i++) if (Math.abs(bars[i]!.close / bars[i - 1]!.close - 1) > SPLIT_JUMP) jump = true;
+    for (let i = 1; i < bars.length; i++) if (looksLikeSplit(bars[i - 1]!, bars[i]!)) jump = true;
     if (jump) {
       droppedSplit += 1;
       continue;
@@ -290,6 +312,12 @@ async function main() {
       if (Object.keys(fwd).length === 0) continue;
       obs.push({ date: t, sym, bank: isBank.has(sym), f, fwd });
     }
+  }
+
+  const dbg = get("debug");
+  if (dbg) {
+    const rows = obs.filter((o) => o.sym === dbg).slice(-3);
+    for (const o of rows) console.log(`[debug ${dbg}] ${o.date} bank=${o.bank} ` + JSON.stringify(Object.fromEntries(Object.entries(o.f).map(([k, v]) => [k, v === null ? null : Number(v.toFixed(4))]))));
   }
 
   // QV composite = average per-date percentile rank of ROE, EP, CFP (needs all three)
