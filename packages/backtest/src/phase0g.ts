@@ -177,7 +177,7 @@ async function main() {
     for (let i = 30; i <= bars.length - hold - 3; i++) {
       const b = bars[i]!;
       if (b.close < MIN_PRICE) continue;
-      const avgTo = mean(bars.slice(i - 19, i + 1).map((x) => x.turnover));
+      const avgTo = mean(bars.slice(i - 19, i + 1).map((x) => x.turnover ?? x.close * x.volume));
       if (!(avgTo >= MIN_AVG_TURNOVER)) continue;
       byDate.set(b.date, [...(byDate.get(b.date) ?? []), { symbol, i, bars, date: b.date }]);
       drift.push((bars[i + hold]!.close / b.close - 1) * 100);
