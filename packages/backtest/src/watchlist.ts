@@ -10,9 +10,12 @@
  *            (weak lead: positive excess over a same-day random pick under stop/target
  *             exits in both halves in Phase 0H, individually insignificant; being
  *             forward-tested as `screener_technical`)
- *   FLOW     day's net-flow imbalance of the top-20 broker book > 0
- *            (small consistently positive rank-IC in Phase 0E, below costs; forward-
- *             tested as `screener_flow`). Only where a full-book day is stored.
+ *   FLOW     day's net-flow imbalance of the top-20 broker book in the TOP 30% of the
+ *            universe that has data. It must be RELATIVE: the listed brokers are the
+ *            top 20, so the imbalance is structurally positive for almost every stock
+ *            (+30% to +90%) and "> 0" carries no information. (Small consistently
+ *            positive rank-IC in Phase 0E, below costs; forward-tested as
+ *            `screener_flow`.) Only where a full-book day is stored.
  *   QUALITY  trailing-4-quarter net income > 0 AND operating cash flow > 0, using only
  *            statements public by the as-of date (quarter end + 90 days)
  *            (hygiene filter: profitability is a robust factor in Indonesia per the
@@ -137,6 +140,7 @@ async function main() {
     lots: number | null;
     rr: number | null;
     noTrade: boolean;
+    flowTop: boolean;
     flags: number;
     turnover: number;
   }
@@ -158,7 +162,7 @@ async function main() {
     const quality = n === null || o === null ? null : n > 0 && o > 0;
     const history: HistoryData = { symbol, bars: b.slice(Math.max(0, i - 119)), baselineMedianVolume20d: null };
     const plan = planFromHistory(symbol, asOf, history, cfg, `${asOf}T08:49:00.000Z`, "low5");
-    const flags = (trend ? 1 : 0) + (fl !== null && fl > 0 ? 1 : 0) + (quality === true ? 1 : 0);
+    const flags = 0; // filled after the cross-sectional flow threshold is known
     out.push({
       symbol,
       close: c.close,
@@ -171,9 +175,18 @@ async function main() {
       lots: plan ? plan.totalLots : null,
       rr: plan ? plan.netRewardToRisk : null,
       noTrade: plan ? plan.isNoTrade : true,
+      flowTop: false,
       flags,
       turnover: avgTo
     });
+  }
+
+  // FLOW is relative: top 30% of the imbalances among names that have a full book today
+  const flows = out.filter((r) => r.flow !== null).map((r) => r.flow as number).sort((a, b) => a - b);
+  const flowCut = flows.length ? flows[Math.floor(flows.length * 0.7)]! : Infinity;
+  for (const r of out) {
+    r.flowTop = r.flow !== null && r.flow >= flowCut;
+    r.flags = (r.trend ? 1 : 0) + (r.flowTop ? 1 : 0) + (r.quality === true ? 1 : 0);
   }
 
   // order: flags met (desc), then liquidity (desc) -- NOT an expected-return ranking
@@ -181,11 +194,12 @@ async function main() {
   const yn = (v: boolean | null) => (v === null ? "n/a" : v ? "yes" : "no");
   console.log(`As of ${asOf} close. Universe: ${out.length} liquid names (avg turnover >= Rp${(minTurnover / 1e9).toFixed(1)}B, price >= 51).`);
   console.log(`Flags met: 3 -> ${out.filter((r) => r.flags === 3).length}, 2 -> ${out.filter((r) => r.flags === 2).length}, 1 -> ${out.filter((r) => r.flags === 1).length}, 0 -> ${out.filter((r) => r.flags === 0).length}`);
+  console.log(`FLOW cutoff (70th percentile of net-flow imbalance among ${flows.length} names with a full book): ${(flowCut * 100).toFixed(0)}%`);
   console.log(`Flow data available for ${out.filter((r) => r.flow !== null).length}/${out.length}; quality data for ${out.filter((r) => r.quality !== null).length}/${out.length}.\n`);
   console.log("sym    close  flags trend flow(imb)  quality ret20   volPace stop%   lots  netRR  engine");
   for (const r of out.filter((x) => x.flags >= 1).slice(0, top))
     console.log(
-      `${r.symbol.padEnd(6)} ${String(r.close).padStart(6)}  ${r.flags}/3   ${yn(r.trend).padEnd(5)} ${(r.flow === null ? "n/a" : (r.flow * 100).toFixed(1) + "%").padEnd(10)} ${yn(r.quality).padEnd(7)} ${pct(r.ret20).padStart(6)} ${r.volPace.toFixed(1).padStart(6)}x ${pct(r.stopPct ?? NaN).padStart(6)} ${String(r.lots ?? "-").padStart(5)} ${(r.rr ?? 0).toFixed(2).padStart(6)}  ${r.noTrade ? "NO_TRADE" : "plan ok"}`
+      `${r.symbol.padEnd(6)} ${String(r.close).padStart(6)}  ${r.flags}/3   ${yn(r.trend).padEnd(5)} ${(r.flow === null ? "n/a" : (r.flow * 100).toFixed(0) + "%" + (r.flowTop ? " TOP" : "")).padEnd(10)} ${yn(r.quality).padEnd(7)} ${pct(r.ret20).padStart(6)} ${r.volPace.toFixed(1).padStart(6)}x ${pct(r.stopPct ?? NaN).padStart(6)} ${String(r.lots ?? "-").padStart(5)} ${(r.rr ?? 0).toFixed(2).padStart(6)}  ${r.noTrade ? "NO_TRADE" : "plan ok"}`
     );
   process.exit(0);
 }
