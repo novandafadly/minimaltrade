@@ -10,9 +10,18 @@
  *    (always fills, no limit-order selection). Exit bars start on the entry bar.
  *  - Explicit costs (default 0.6% round trip = 0.4% Stockbit fees + 0.2% slippage).
  *  - A pre-registered grid: 13 entry signals x 9 exit rules = 117 configs.
- *  - Success = mean net return > 0 AND by-date t >= 2 in BOTH halves of the
- *    window independently (n >= 100 events per half). The halves are different
- *    regimes (first half down, second half up), so this demands robustness.
+ *  - Success is judged on EXCESS return: each signal event's net return minus the
+ *    mean of ALL eligible events on the same date under the same exit rule. In a
+ *    rising market (and with a universe chosen with hindsight -- see below) every
+ *    long-only rule looks profitable in absolute terms; only the excess says
+ *    whether the SIGNAL picks better than picking anything that day. A config
+ *    must show excess > 0 and by-date t >= 2 in BOTH halves independently (n >= 100
+ *    events per half).
+ *  - UNIVERSE CAVEAT: daily_bar holds the names ARJUM/market-cap rankings surfaced
+ *    around Sep 2026 (liquid NOW). Choosing the universe with knowledge of the end
+ *    date biases every long-only return upward (names that rallied into September
+ *    are over-represented). The excess-vs-all-events test cancels this common bias;
+ *    absolute returns should not be trusted.
  *  - A placebo calibration: the same grid on RANDOM event sets with the same
  *    per-date counts, repeated R times. The real best score must beat the
  *    placebo distribution of "best of 117", otherwise it is data-snooping.
@@ -304,6 +313,17 @@ async function main() {
   const byDateIdx = new Map<string, number[]>();
   events.forEach((e, k) => byDateIdx.set(e.date, [...(byDateIdx.get(e.date) ?? []), k]));
 
+  // unconditional mean net return of ALL eligible events, per date and exit rule
+  const allMean = new Map<string, number[]>();
+  for (const [d, ks] of byDateIdx) allMean.set(d, EXITS.map((_, ei) => mean(ks.map((k) => events[k]!.rets[ei]!))));
+  const excessStat = (rows: { date: string; r: number }[], e: number) => {
+    const byD = new Map<string, number[]>();
+    for (const x of rows) byD.set(x.date, [...(byD.get(x.date) ?? []), x.r]);
+    const diffs = [...byD.entries()].map(([d, rs]) => mean(rs) - allMean.get(d)![e]!);
+    const t = diffs.length >= 3 ? mean(diffs) / (sd(diffs) / Math.sqrt(diffs.length)) : NaN;
+    return { mean: mean(diffs), t };
+  };
+
   const evalSet = (idxs: number[], e: number) => {
     const h1: { date: string; r: number }[] = [];
     const h2: { date: string; r: number }[] = [];
@@ -311,10 +331,11 @@ async function main() {
       const ev = events[k]!;
       (half(ev.date) === 1 ? h1 : h2).push({ date: ev.date, r: ev.rets[e]! });
     }
-    return { h1: statOf(h1), h2: statOf(h2), all: statOf([...h1, ...h2]) };
+    return { h1: statOf(h1), h2: statOf(h2), all: statOf([...h1, ...h2]), x1: excessStat(h1, e), x2: excessStat(h2, e) };
   };
+  // score = the weaker half's by-date t of the EXCESS over all events that day
   const score = (r: ReturnType<typeof evalSet>) =>
-    r.h1.n >= MIN_N_PER_HALF && r.h2.n >= MIN_N_PER_HALF ? Math.min(r.h1.t, r.h2.t) : -Infinity;
+    r.h1.n >= MIN_N_PER_HALF && r.h2.n >= MIN_N_PER_HALF ? Math.min(r.x1.t, r.x2.t) : -Infinity;
 
   // ----- real grid -----
   interface Row {
@@ -326,6 +347,10 @@ async function main() {
     mean2: number;
     t1: number;
     t2: number;
+    ex1: number;
+    ex2: number;
+    xt1: number;
+    xt2: number;
     win: number;
     meanAll: number;
     pf: number;
@@ -345,6 +370,10 @@ async function main() {
         mean2: r.h2.mean,
         t1: r.h1.t,
         t2: r.h2.t,
+        ex1: r.x1.mean,
+        ex2: r.x2.mean,
+        xt1: r.x1.t,
+        xt2: r.x2.t,
         win: r.all.win,
         meanAll: r.all.mean,
         pf: r.all.pf,
@@ -386,27 +415,34 @@ async function main() {
   placeboBest.sort((a, b) => a - b);
   const q = (p: number) => placeboBest[Math.min(placeboBest.length - 1, Math.floor(p * placeboBest.length))]!;
 
-  const survivors = grid.filter((g) => g.score >= 2 && g.mean1 > 0 && g.mean2 > 0);
+  const survivors = grid.filter((g) => g.score >= 2 && g.ex1 > 0 && g.ex2 > 0);
   const bestReal = [...grid].sort((a, b) => b.score - a.score);
   const realBest = bestReal[0]!.score;
   const pValue = (placeboBest.filter((x) => x >= realBest).length + 1) / (REPS + 1);
 
   const fmt = (g: Row) =>
-    `${g.signal.padEnd(52)} ${g.exit.padEnd(26)} n=${g.n1}/${g.n2}  H1 ${r2(g.mean1)}% (t ${r2(g.t1)})  H2 ${r2(g.mean2)}% (t ${r2(g.t2)})  win ${r2(g.win * 100)}%  PF ${r2(g.pf)}  all ${r2(g.meanAll)}%`;
+    `${g.signal.padEnd(52)} ${g.exit.padEnd(26)} n=${g.n1}/${g.n2}  abs H1 ${r2(g.mean1)}% H2 ${r2(g.mean2)}% | EXCESS H1 ${r2(g.ex1)}% (t ${r2(g.xt1)})  H2 ${r2(g.ex2)}% (t ${r2(g.xt2)})  win ${r2(g.win * 100)}%  PF ${r2(g.pf)}`;
 
   const lines: string[] = [];
+  const baseRows = EXITS.map((ex, ei) => {
+    const all = events.map((_, k) => k);
+    const r = evalSet(all, ei);
+    return `  ${ex.name.padEnd(26)} H1 ${r2(r.h1.mean)}%  H2 ${r2(r.h2.mean)}%  win ${r2(r.all.win * 100)}%`;
+  });
   lines.push(`events=${events.length} dates=${dates.length} (${dates[0]} .. ${dates[dates.length - 1]}) split at ${mid}; cost=${COST * 100}% round trip; configs=${grid.length}; placebo reps=${REPS}`);
-  lines.push(`\nSURVIVORS (mean>0 in BOTH halves, by-date t>=2 in both, n>=${MIN_N_PER_HALF}/half): ${survivors.length}`);
+  lines.push(`\nUNCONDITIONAL baseline = mean net % of ALL eligible events (the drift every rule rides on):`);
+  baseRows.forEach((l) => lines.push(l));
+  lines.push(`\nSURVIVORS (EXCESS>0 in BOTH halves, by-date t>=2 in both, n>=${MIN_N_PER_HALF}/half): ${survivors.length}`);
   survivors.forEach((g) => lines.push("  " + fmt(g)));
-  lines.push(`\nTOP 12 by min(t_H1, t_H2)`);
+  lines.push(`\nTOP 12 by min(excess t_H1, excess t_H2)`);
   bestReal.slice(0, 12).forEach((g) => lines.push("  " + fmt(g) + `  score ${r2(g.score)}`));
   lines.push(`\nTOP 8 by overall mean net % (selection bias applies!)`);
   [...grid].filter((g) => g.n1 + g.n2 >= 200).sort((a, b) => b.meanAll - a.meanAll).slice(0, 8).forEach((g) => lines.push("  " + fmt(g)));
   lines.push(`\nHIGHEST WIN RATES (n>=200) -- note the expectancy`);
   [...grid].filter((g) => g.n1 + g.n2 >= 200).sort((a, b) => b.win - a.win).slice(0, 8).forEach((g) => lines.push("  " + fmt(g)));
-  lines.push(`\nPLACEBO calibration (best min-t of ${grid.length} configs on RANDOM events): median ${r2(q(0.5))}, p90 ${r2(q(0.9))}, p95 ${r2(q(0.95))}, max ${r2(placeboBest[placeboBest.length - 1]!)}`);
-  lines.push(`placebo mean # of configs with min-t>=2: ${r2(mean(placeboSurvivors))}`);
-  lines.push(`REAL best min-t = ${r2(realBest)}  -> empirical p-value vs placebo best-of-${grid.length} = ${r2(pValue)}`);
+  lines.push(`\nPLACEBO calibration (best min excess-t of ${grid.length} configs on RANDOM events): median ${r2(q(0.5))}, p90 ${r2(q(0.9))}, p95 ${r2(q(0.95))}, max ${r2(placeboBest[placeboBest.length - 1]!)}`);
+  lines.push(`placebo mean # of configs with min excess-t>=2: ${r2(mean(placeboSurvivors))}`);
+  lines.push(`REAL best min excess-t = ${r2(realBest)}  -> empirical p-value vs placebo best-of-${grid.length} = ${r2(pValue)}`);
 
   const report = { generatedAt: new Date().toISOString(), costPct: COST * 100, split: mid, dates: dates.length, events: events.length, placeboReps: REPS, placeboBestMinT: placeboBest, realBestMinT: realBest, pValue, survivors, top: bestReal.slice(0, 20), grid };
   const out = get("out");
