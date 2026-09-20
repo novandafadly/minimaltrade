@@ -86,8 +86,8 @@ describe("evaluateShadowOutcomes", () => {
 
   it("leaves a plan pending until enough forward bars exist", async () => {
     await insertShadow("AAAA", "baseline_volume", samplePlan("AAAA"));
-    await insertBar("AAAA", "2026-06-01", 995, 1005, 990, 998); // entry day only
-    await insertBar("AAAA", "2026-06-02", 1000, 1010, 995, 1005); // one forward bar
+    await insertBar("AAAA", "2026-06-01", 995, 1005, 990, 998); // plan date
+    await insertBar("AAAA", "2026-06-02", 1000, 1010, 995, 1005); // entry session only -- no walk bars yet
 
     const { evaluated } = await evaluateShadowOutcomes(db, DEFAULT_STRATEGY_CONFIG, { minForwardBars: 3 });
     expect(evaluated).toBe(0);
@@ -97,10 +97,11 @@ describe("evaluateShadowOutcomes", () => {
 
   it("records a winning outcome once the market plays out (TP1 then TP2)", async () => {
     await insertShadow("BBBB", "live", samplePlan("BBBB"));
-    await insertBar("BBBB", "2026-06-01", 995, 1005, 990, 998); // fills at open 995
-    await insertBar("BBBB", "2026-06-02", 1010, 1130, 1000, 1115); // TP1 (>=1120)
-    await insertBar("BBBB", "2026-06-03", 1120, 1190, 1100, 1185); // TP2 (>=1180)
-    await insertBar("BBBB", "2026-06-04", 1180, 1200, 1170, 1190);
+    await insertBar("BBBB", "2026-06-01", 995, 1005, 990, 998); // plan date (ignored for the fill)
+    await insertBar("BBBB", "2026-06-02", 995, 1005, 990, 998); // entry session: fills at open 995
+    await insertBar("BBBB", "2026-06-03", 1010, 1130, 1000, 1115); // TP1 (>=1120)
+    await insertBar("BBBB", "2026-06-04", 1120, 1190, 1100, 1185); // TP2 (>=1180)
+    await insertBar("BBBB", "2026-06-05", 1180, 1200, 1170, 1190);
 
     const { evaluated } = await evaluateShadowOutcomes(db, DEFAULT_STRATEGY_CONFIG, { minForwardBars: 3 });
     expect(evaluated).toBe(1);
@@ -116,15 +117,32 @@ describe("evaluateShadowOutcomes", () => {
 
   it("records a stop-out as a loss", async () => {
     await insertShadow("CCCC", "baseline_random", samplePlan("CCCC"));
-    await insertBar("CCCC", "2026-06-01", 995, 1005, 990, 998); // fills at 995
-    await insertBar("CCCC", "2026-06-02", 990, 1000, 920, 925); // SL 940 hit
-    await insertBar("CCCC", "2026-06-03", 920, 930, 900, 910);
-    await insertBar("CCCC", "2026-06-04", 910, 915, 905, 908);
+    await insertBar("CCCC", "2026-06-01", 995, 1005, 990, 998); // plan date (ignored for the fill)
+    await insertBar("CCCC", "2026-06-02", 995, 1005, 990, 998); // entry session: fills at 995
+    await insertBar("CCCC", "2026-06-03", 990, 1000, 920, 925); // SL 940 hit
+    await insertBar("CCCC", "2026-06-04", 920, 930, 900, 910);
+    await insertBar("CCCC", "2026-06-05", 910, 915, 905, 908);
 
     await evaluateShadowOutcomes(db, DEFAULT_STRATEGY_CONFIG, { minForwardBars: 3 });
     const [row] = await db.select().from(schema.shadowPlan).where(eq(schema.shadowPlan.symbol, "CCCC"));
     expect(row?.outcomeStatus).toBe("filled");
     expect(row?.firstExitReason).toBe("sl");
     expect(Number(row?.netPnl)).toBeLessThan(0);
+  });
+
+  it("does not fill on the plan's own bar (no look-ahead): a next-session gap-up past maxBuyPrice is a no_fill", async () => {
+    await insertShadow("DDDD", "baseline_volume", samplePlan("DDDD"));
+    // The plan date's own bar WOULD fill the 1000 limit (open 995 <= 1000, low 990 <= 1000) -- the old, look-ahead convention.
+    await insertBar("DDDD", "2026-06-01", 995, 1005, 990, 998);
+    // The real entry session gaps up through maxBuyPrice 1005: the order is rejected.
+    await insertBar("DDDD", "2026-06-02", 1050, 1060, 1040, 1055);
+    await insertBar("DDDD", "2026-06-03", 1055, 1070, 1050, 1065);
+    await insertBar("DDDD", "2026-06-04", 1065, 1075, 1060, 1070);
+    await insertBar("DDDD", "2026-06-05", 1070, 1080, 1065, 1075);
+
+    await evaluateShadowOutcomes(db, DEFAULT_STRATEGY_CONFIG, { minForwardBars: 3 });
+    const [row] = await db.select().from(schema.shadowPlan).where(eq(schema.shadowPlan.symbol, "DDDD"));
+    expect(row?.outcomeStatus).toBe("no_fill");
+    expect(Number(row?.netPnl)).toBe(0);
   });
 });

@@ -99,8 +99,11 @@ async function main() {
   const { createDbClient } = await import("@idx/db");
   const src = new PostgresDataSource(createDbClient(dbUrl));
 
+  // Honest by default: fill on the NEXT session. `--entry=sameBar` reproduces the pre-2026-09-21
+  // (look-ahead) numbers in docs/BACKTEST_PHASE0D.md -- see docs/BACKTEST_PHASE0G.md.
+  const nextSession = get("entry") !== "sameBar";
   const dates = await src.listTradingDates();
-  process.stderr.write(`Loading ${dates.length} dates...\n`);
+  process.stderr.write(`Loading ${dates.length} dates (entry=${nextSession ? "nextSession" : "sameBar"})...\n`);
 
   const outcomesByStrategy: Record<"technical" | "volume" | "random", ReturnType<typeof simulateTradePlan>[]> = {
     technical: [],
@@ -138,7 +141,13 @@ async function main() {
     const simFor = async (sym: string) => {
       let c = simCache.get(sym);
       if (!c) {
-        c = { barOn: await src.getBarOn(sym, date), simBars: await src.getSimulationBars(sym, date, MAX_HOLD) };
+        if (nextSession) {
+          // plans are built from the close of `date`: entry is the next session, exits walk after it
+          const after = await src.getSimulationBars(sym, date, MAX_HOLD + 1);
+          c = { barOn: after[0] ?? null, simBars: after.slice(1) };
+        } else {
+          c = { barOn: await src.getBarOn(sym, date), simBars: await src.getSimulationBars(sym, date, MAX_HOLD) };
+        }
         simCache.set(sym, c);
       }
       return c;
@@ -181,6 +190,7 @@ async function main() {
     generatedAt: new Date().toISOString(),
     window: { from: dates[0], to: dates[dates.length - 1], days: dates.length },
     configVersion: cfg.version,
+    entryConvention: nextSession ? "nextSession" : "sameBar (look-ahead)",
     shortlistPerDay: SHORTLIST,
     stopMethod: "low5",
     note: "technical rules mirror apps/worker/src/shadow/screeners.ts; ONE window / regime; universe = names that entered the funnel (mild survivorship bias)",

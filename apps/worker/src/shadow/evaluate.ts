@@ -7,10 +7,17 @@ import { simulateTradePlan } from "@idx/backtest";
 
 /**
  * Forward-evaluate pending shadow plans. For each shadow_plan with no
- * recorded outcome that has at least `minForwardBars` `daily_bar` rows dated
- * after its trading date, run the same fill/exit simulator the backtest uses
- * and write the outcome. Cheap — a handful of small queries per pending row,
- * bounded per tick.
+ * recorded outcome that has enough `daily_bar` rows AFTER its trading date, run
+ * the same fill/exit simulator the backtest uses and write the outcome. Cheap --
+ * one small query per pending row, bounded per tick.
+ *
+ * ENTRY CONVENTION: a shadow plan is written after the close of its trading
+ * date with entryTrigger = that close, so it can only be acted on from the NEXT
+ * session. The entry order is evaluated against the first bar after the plan
+ * date and exits walk from the bar after that. (This used to fill on the plan
+ * date's own bar at min(open, close) -- look-ahead worth roughly +3 points of
+ * net return per trade in Phase 0G -- which flattered momentum/breakout-style
+ * sources the most, because they pick names that already closed strongly.)
  *
  * Fees/slippage use the CURRENT StrategyConfig (they don't drift often; this
  * is a forward-test approximation, and the plan's own numbers were computed
@@ -58,28 +65,21 @@ export async function evaluateShadowOutcomes(
       .from(schema.dailyBar)
       .where(and(eq(schema.dailyBar.symbol, p.symbol), gt(schema.dailyBar.tradingDate, p.tradingDate)))
       .orderBy(asc(schema.dailyBar.tradingDate))
-      .limit(MAX_HOLDING_BARS);
-    if (forward.length < minForward) continue; // not enough forward history yet
+      .limit(MAX_HOLDING_BARS + 1); // entry session + the exit walk
+    if (forward.length < minForward + 1) continue; // need the entry session plus `minForward` bars after it
 
-    const entryRows = await db
-      .select()
-      .from(schema.dailyBar)
-      .where(and(eq(schema.dailyBar.symbol, p.symbol), eq(schema.dailyBar.tradingDate, p.tradingDate)))
-      .limit(1);
+    const [entryRow, ...walkRows] = forward;
+    const walk = walkRows.map(toBar);
 
     const plan = p.planJson as unknown as TradePlan;
-    const outcome = simulateTradePlan(
-      plan,
-      entryRows[0] ? toBar(entryRows[0]) : null,
-      forward.map(toBar),
-      config,
-      { maxHoldingBars: MAX_HOLDING_BARS }
-    );
+    const outcome = simulateTradePlan(plan, entryRow ? toBar(entryRow) : null, walk, config, {
+      maxHoldingBars: MAX_HOLDING_BARS
+    });
 
     const lastExit = outcome.exits[outcome.exits.length - 1];
     const barsHeld = lastExit
-      ? forward.findIndex((b) => b.tradingDate === lastExit.date) + 1
-      : forward.length;
+      ? walk.findIndex((b) => b.date === lastExit.date) + 1
+      : walk.length;
 
     await db
       .update(schema.shadowPlan)
@@ -88,7 +88,7 @@ export async function evaluateShadowOutcomes(
         filledLots: outcome.fill.filledLots,
         firstExitReason: outcome.exits[0]?.reason ?? null,
         netPnl: String(outcome.netPnl),
-        barsHeld: barsHeld > 0 ? barsHeld : forward.length,
+        barsHeld: barsHeld > 0 ? barsHeld : walk.length,
         evaluatedAt: new Date()
       })
       .where(eq(schema.shadowPlan.id, p.id));

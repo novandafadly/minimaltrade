@@ -8,7 +8,7 @@ import { runReplayBatch } from "../replayEngine.js";
 describe("runReplayBatch", () => {
   it("runs the signal-driven strategy and both baselines over the fixture, producing metrics for each", async () => {
     const dataSource = withLeakGuard(new FixtureDataSource(buildSyntheticFixture()));
-    const result = await runReplayBatch({ dataSource, config: DEFAULT_STRATEGY_CONFIG, maxCandidatesPerDay: 3, randomSeed: 1 });
+    const result = await runReplayBatch({ dataSource, config: DEFAULT_STRATEGY_CONFIG, maxCandidatesPerDay: 3, randomSeed: 1, entryConvention: "sameBar" });
 
     expect(result.tradingDates.length).toBeGreaterThan(0);
     expect(Object.keys(result.strategies).sort()).toEqual([
@@ -38,7 +38,7 @@ describe("runReplayBatch", () => {
   it("is deterministic across repeated runs with the same seed", async () => {
     const buildResult = async () => {
       const dataSource = withLeakGuard(new FixtureDataSource(buildSyntheticFixture()));
-      return runReplayBatch({ dataSource, config: DEFAULT_STRATEGY_CONFIG, maxCandidatesPerDay: 3, randomSeed: 7 });
+      return runReplayBatch({ dataSource, config: DEFAULT_STRATEGY_CONFIG, maxCandidatesPerDay: 3, randomSeed: 7, entryConvention: "sameBar" });
     };
     const a = await buildResult();
     const b = await buildResult();
@@ -48,7 +48,7 @@ describe("runReplayBatch", () => {
 
   it("respects fromDate/toDate range filtering", async () => {
     const dataSource = withLeakGuard(new FixtureDataSource(buildSyntheticFixture()));
-    const full = await runReplayBatch({ dataSource, config: DEFAULT_STRATEGY_CONFIG });
+    const full = await runReplayBatch({ dataSource, config: DEFAULT_STRATEGY_CONFIG, entryConvention: "sameBar" });
     const narrowed = await runReplayBatch({
       dataSource,
       config: DEFAULT_STRATEGY_CONFIG,

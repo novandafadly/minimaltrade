@@ -93,6 +93,8 @@ async function main(): Promise<void> {
   const result = await runReplayBatch({
     dataSource,
     config: DEFAULT_STRATEGY_CONFIG,
+    // Synthetic fixture scenarios are built around a same-bar fill; real data must use the next session.
+    entryConvention: args.source === "fixture" ? "sameBar" : "nextSession",
     ...(args.fromDate ? { fromDate: args.fromDate } : {}),
     ...(args.toDate ? { toDate: args.toDate } : {})
   });
