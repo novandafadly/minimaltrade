@@ -82,6 +82,16 @@ export async function GET(req: NextRequest) {
       if (!latestBySymbol.has(row.symbol)) latestBySymbol.set(row.symbol, row);
     }
 
+    // Only show the CURRENT run. A symbol that dropped out of the shortlist
+    // keeps its old row forever; without this it lingered on the dashboard
+    // (with a stale "Data is stale" reason from days ago) as if it were
+    // current. All names from one deep-funnel run share the same trading date.
+    let latestTradingDate = "";
+    for (const row of latestBySymbol.values()) if (row.tradingDate > latestTradingDate) latestTradingDate = row.tradingDate;
+    for (const [symbol, row] of latestBySymbol) {
+      if (row.tradingDate !== latestTradingDate) latestBySymbol.delete(symbol);
+    }
+
     const env = loadEnv();
     const cal = buildSessionCalendar(env);
     const now = new Date();

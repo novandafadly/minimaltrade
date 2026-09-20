@@ -9,13 +9,18 @@ import { loadEnv, buildSessionCalendar, isWithinSession, DEFAULT_STRATEGY_CONFIG
 import { createDbClient, schema } from "@idx/db";
 import { eq } from "drizzle-orm";
 import { createRedisClient } from "./cache/redis.js";
-import { getScreenerLatest, getMarketCapAll, type AdapterContext } from "./adapter/endpoints.js";
+import { getScreenerLatest, getMarketCapAll, getHistory, type AdapterContext } from "./adapter/endpoints.js";
 import { getOrFetch } from "./cache/cache.js";
 import { CACHE_TTL_SECONDS } from "./cache/ttl.js";
 import { reserveRequest, recordLedgerEntry } from "./cache/budget.js";
 import { runTopFunnel } from "./funnel/top.js";
 import { runMidFunnel } from "./funnel/mid.js";
 import { runDeepFunnel } from "./funnel/deep.js";
+import {
+  isDeepFunnelWindow,
+  DEEP_FUNNEL_CANARY_SYMBOL,
+  DEEP_FUNNEL_CANARY_INTERVAL_SECONDS
+} from "./funnel/schedule.js";
 import { computeWorkerHealth, recordScreenerPollSuccess } from "./health.js";
 import { maybePublishCategoryChangeAlert } from "./alerts/index.js";
 import { persistShadowPlans } from "./shadow/persist.js";
@@ -155,9 +160,24 @@ async function maybeRunDeepFunnelOnceToday(
   const flagKey = `${DEEP_FUNNEL_RUN_FLAG_PREFIX}${dayBucket}`;
 
   const { minutesSinceMidnight, dayOfWeek } = localSessionClock(now, env.SESSION_TIMEZONE);
-  const stillWithinSession = isWithinSession(sessionCalendar, dayOfWeek, minutesSinceMidnight);
-  if (stillWithinSession) return; // only run after EOD (outside session hours)
-  if (dayOfWeek === 0 || dayOfWeek === 6) return; // no trading day
+  // Only AFTER the trading day ended -- "not in session" is not enough (the
+  // lunch break and pre-open are also outside a session; see funnel/schedule.ts).
+  if (!isDeepFunnelWindow(sessionCalendar, dayOfWeek, minutesSinceMidnight)) return;
+  if (await redis.exists(flagKey)) return; // already ran today
+
+  // Canary: only proceed once the upstream has actually published TODAY's bar.
+  // Bypasses the cache on purpose (a cached pre-publish response would defeat
+  // it) and is throttled to one probe per DEEP_FUNNEL_CANARY_INTERVAL_SECONDS.
+  // On an exchange holiday the bar never appears, so the funnel correctly
+  // never runs (probing stops at DEEP_FUNNEL_LATEST_MINUTES).
+  const canaryKey = `idx:worker:deepFunnelCanary:${dayBucket}`;
+  if ((await redis.set(canaryKey, "1", "EX", DEEP_FUNNEL_CANARY_INTERVAL_SECONDS, "NX")) !== "OK") return;
+  const canary = await getHistory(ctx, DEEP_FUNNEL_CANARY_SYMBOL);
+  const lastBarDate = canary.data.bars[canary.data.bars.length - 1]?.date;
+  if (lastBarDate !== dayBucket) {
+    console.log(`[funnel] deep funnel waiting: upstream latest bar is ${lastBarDate ?? "none"}, need ${dayBucket}`);
+    return;
+  }
 
   const alreadyRan = await redis.set(flagKey, "1", "EX", 20 * 60 * 60, "NX");
   if (alreadyRan !== "OK") return;
