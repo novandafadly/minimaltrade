@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { buildSessionCalendar } from "@idx/config";
-import { isDeepFunnelWindow } from "../schedule.js";
+import { isDeepFunnelWindow, deepFunnelUpstreamReady } from "../schedule.js";
 
 const cal = buildSessionCalendar({
   SESSION_TIMEZONE: "Asia/Jakarta",
@@ -41,5 +41,25 @@ describe("isDeepFunnelWindow", () => {
   it("never fires on weekends", () => {
     expect(isDeepFunnelWindow(cal, 0, at(18, 0))).toBe(false);
     expect(isDeepFunnelWindow(cal, 6, at(18, 0))).toBe(false);
+  });
+});
+
+describe("deepFunnelUpstreamReady", () => {
+  const day = "2026-09-21";
+  it("waits while the price bar is not yet published", () => {
+    const r = deepFunnelUpstreamReady({ dayBucket: day, lastBarDate: "2026-09-18", brokerEndDate: null });
+    expect(r.ready).toBe(false);
+    expect(r.reason).toContain("price history");
+  });
+  it("waits while the broker summary still ends on an earlier day (the 2026-09-21 17:09 bug)", () => {
+    const r = deepFunnelUpstreamReady({ dayBucket: day, lastBarDate: day, brokerEndDate: "2026-09-18" });
+    expect(r.ready).toBe(false);
+    expect(r.reason).toContain("broker summary ends 2026-09-18");
+  });
+  it("is ready only when both are today", () => {
+    expect(deepFunnelUpstreamReady({ dayBucket: day, lastBarDate: day, brokerEndDate: day }).ready).toBe(true);
+  });
+  it("treats missing data as not ready", () => {
+    expect(deepFunnelUpstreamReady({ dayBucket: day, lastBarDate: undefined, brokerEndDate: undefined }).ready).toBe(false);
   });
 });

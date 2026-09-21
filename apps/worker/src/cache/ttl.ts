@@ -34,6 +34,18 @@ export const CACHE_TTL_SECONDS: Record<EndpointName, number> = {
   analysis: 24 * 60 * 60
 };
 
+/** Endpoints whose payload changes once per trading day after the close. Entries cached
+ * before the upstream publishes today's data would be served for up to 24h, so the deep
+ * funnel purges them once it has confirmed the upstream is ready (see index.ts). */
+export const DAILY_EOD_ENDPOINTS: EndpointName[] = [
+  "marketCap",
+  "history",
+  "brokerSummary",
+  "brokerAccumulation",
+  "insiders",
+  "analysis"
+];
+
 export function ttlForEndpoint(endpoint: EndpointName): number {
   return CACHE_TTL_SECONDS[endpoint];
 }
