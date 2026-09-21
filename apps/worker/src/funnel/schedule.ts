@@ -30,3 +30,23 @@ export function isDeepFunnelWindow(
   const earliest = cal.afternoon.closeMinutes + DEEP_FUNNEL_DELAY_MINUTES_AFTER_CLOSE;
   return minutesSinceMidnight >= earliest && minutesSinceMidnight < DEEP_FUNNEL_LATEST_MINUTES;
 }
+
+/**
+ * Is the upstream ready for the deep funnel? The price history and the broker
+ * summary are published on DIFFERENT clocks: on 2026-09-21 the BBCA price bar for
+ * the day appeared at ~17:09 WIB while the broker summary still ended on the
+ * previous Friday, so a canary that only looked at price ran the funnel on
+ * stale broker books (every candidate tripped the FRESHNESS gate and the stale
+ * books were then cached for 24h). Both must show today's date.
+ */
+export function deepFunnelUpstreamReady(input: {
+  dayBucket: string;
+  lastBarDate: string | null | undefined;
+  brokerEndDate: string | null | undefined;
+}): { ready: boolean; reason: string } {
+  if (input.lastBarDate !== input.dayBucket)
+    return { ready: false, reason: `price history latest bar is ${input.lastBarDate ?? "none"}, need ${input.dayBucket}` };
+  if (input.brokerEndDate !== input.dayBucket)
+    return { ready: false, reason: `broker summary ends ${input.brokerEndDate ?? "none"}, need ${input.dayBucket}` };
+  return { ready: true, reason: "price history and broker summary both published for today" };
+}

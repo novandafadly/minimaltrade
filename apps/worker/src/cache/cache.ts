@@ -118,3 +118,22 @@ export async function getOrFetch<T>(
   const value = await fetcher();
   return { value, cacheHit: false, stale: false };
 }
+
+/**
+ * Delete the MAIN cache entries of the given endpoints (the longer-lived `stale:` shadow
+ * copies are kept: they are only a degraded fallback when a fresh fetch fails).
+ * Returns the number of keys removed. SCAN-based, so it never blocks Redis.
+ */
+export async function purgeCachedEndpoints(redis: Redis, endpoints: EndpointName[]): Promise<number> {
+  let removed = 0;
+  for (const endpoint of endpoints) {
+    const prefix = REDIS_KEYS.cacheEntry(endpoint, "");
+    let cursor = "0";
+    do {
+      const [next, keys] = await redis.scan(cursor, "MATCH", `${prefix}*`, "COUNT", 500);
+      cursor = next;
+      if (keys.length > 0) removed += await redis.del(...keys);
+    } while (cursor !== "0");
+  }
+  return removed;
+}

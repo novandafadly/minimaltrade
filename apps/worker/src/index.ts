@@ -9,15 +9,16 @@ import { loadEnv, buildSessionCalendar, isWithinSession, DEFAULT_STRATEGY_CONFIG
 import { createDbClient, schema } from "@idx/db";
 import { eq } from "drizzle-orm";
 import { createRedisClient } from "./cache/redis.js";
-import { getScreenerLatest, getMarketCapAll, getHistory, type AdapterContext } from "./adapter/endpoints.js";
-import { getOrFetch } from "./cache/cache.js";
-import { CACHE_TTL_SECONDS } from "./cache/ttl.js";
+import { getScreenerLatest, getMarketCapAll, getHistory, getBrokerSummary, type AdapterContext } from "./adapter/endpoints.js";
+import { getOrFetch, purgeCachedEndpoints } from "./cache/cache.js";
+import { CACHE_TTL_SECONDS, DAILY_EOD_ENDPOINTS } from "./cache/ttl.js";
 import { reserveRequest, recordLedgerEntry } from "./cache/budget.js";
 import { runTopFunnel } from "./funnel/top.js";
 import { runMidFunnel } from "./funnel/mid.js";
 import { runDeepFunnel } from "./funnel/deep.js";
 import {
   isDeepFunnelWindow,
+  deepFunnelUpstreamReady,
   DEEP_FUNNEL_CANARY_SYMBOL,
   DEEP_FUNNEL_CANARY_INTERVAL_SECONDS
 } from "./funnel/schedule.js";
@@ -174,15 +175,25 @@ async function maybeRunDeepFunnelOnceToday(
   if ((await redis.set(canaryKey, "1", "EX", DEEP_FUNNEL_CANARY_INTERVAL_SECONDS, "NX")) !== "OK") return;
   const canary = await getHistory(ctx, DEEP_FUNNEL_CANARY_SYMBOL);
   const lastBarDate = canary.data.bars[canary.data.bars.length - 1]?.date;
-  if (lastBarDate !== dayBucket) {
-    console.log(`[funnel] deep funnel waiting: upstream latest bar is ${lastBarDate ?? "none"}, need ${dayBucket}`);
+  // Price and broker data are published on different clocks: check both (only probe the
+  // broker summary once the price bar is in, to keep the canary at <= 2 requests per probe).
+  let brokerEndDate: string | null = null;
+  if (lastBarDate === dayBucket) {
+    brokerEndDate = (await getBrokerSummary(ctx, DEEP_FUNNEL_CANARY_SYMBOL, true)).tradingDate;
+  }
+  const readiness = deepFunnelUpstreamReady({ dayBucket, lastBarDate, brokerEndDate });
+  if (!readiness.ready) {
+    console.log(`[funnel] deep funnel waiting: ${readiness.reason}`);
     return;
   }
 
   const alreadyRan = await redis.set(flagKey, "1", "EX", 20 * 60 * 60, "NX");
   if (alreadyRan !== "OK") return;
 
-  console.log("[funnel] running deep funnel (EOD)");
+  // Anything cached before the upstream published today's data (e.g. by an earlier intraday
+  // or shadow fetch) would be served for up to 24h: drop the once-per-day entries first.
+  const purged = await purgeCachedEndpoints(redis, DAILY_EOD_ENDPOINTS);
+  console.log(`[funnel] running deep funnel (EOD); purged ${purged} cached daily entries`);
 
   const { value: screenerResult } = await getOrFetch(
     redis,

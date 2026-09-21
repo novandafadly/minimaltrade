@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 import RedisMock from "ioredis-mock";
 import type { Redis } from "ioredis";
-import { getOrFetch } from "../cache.js";
+import { getOrFetch, purgeCachedEndpoints } from "../cache.js";
 
 // ioredis-mock v6+ shares in-memory state across instances on the same
 // host:port (to emulate multiple real clients against one server); give
@@ -94,5 +94,29 @@ describe("getOrFetch single-flight lease", () => {
     expect(fetcher).toHaveBeenCalledTimes(2); // leader + timed-out follower duplicate call (documented worst case)
     expect(leaderResult.value).toBe("value");
     expect(followerResult.value).toBe("value");
+  });
+});
+
+describe("purgeCachedEndpoints", () => {
+  it("removes main entries of the listed endpoints only, keeps stale copies and other endpoints", async () => {
+    const redis = freshRedis();
+    await getOrFetch(redis, "brokerSummary", "BBCA", 3600, async () => ({ v: 1 }));
+    await getOrFetch(redis, "brokerSummary", "TLKM", 3600, async () => ({ v: 2 }));
+    await getOrFetch(redis, "history", "BBCA", 3600, async () => ({ v: 3 }));
+    await getOrFetch(redis, "seasonal", "BBCA", 3600, async () => ({ v: 4 }));
+
+    const removed = await purgeCachedEndpoints(redis, ["brokerSummary", "history"]);
+    expect(removed).toBe(3);
+
+    expect(await redis.get("idx:cache:brokerSummary:BBCA")).toBeNull();
+    expect(await redis.get("idx:cache:history:BBCA")).toBeNull();
+    expect(await redis.get("idx:cache:seasonal:BBCA")).not.toBeNull(); // not a daily EOD endpoint here
+    expect(await redis.get("idx:cache:stale:brokerSummary:BBCA")).not.toBeNull(); // fallback copy kept
+
+    // after the purge the next call refetches (would otherwise serve the pre-publish payload)
+    let calls = 0;
+    const r = await getOrFetch(redis, "brokerSummary", "BBCA", 3600, async () => ({ v: (calls += 1) * 10 }));
+    expect(r.cacheHit).toBe(false);
+    expect(calls).toBe(1);
   });
 });
