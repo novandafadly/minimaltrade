@@ -73,6 +73,13 @@ runs the backtest fill/exit simulator and records `outcome_status`,
 
 ## Caveats
 
+- **Entry convention.** A plan is written after the close of its trading date with
+  `entryTrigger` = that close, so the evaluator fills it on the **next session**
+  (first `daily_bar` after the plan date) and walks exits from the bar after that.
+  Before 2026-09-21 it filled on the plan date's own bar at `min(open, close)` —
+  look-ahead worth ~+3 points of net return per trade (docs/BACKTEST_PHASE0G.md)
+  that also favoured breakout-style sources. Outcomes recorded before the fix were
+  reset and re-evaluated.
 - Needs time. ~20 IDX trading days/month; statistical confidence takes 1–3
   months.
 - `daily_bar` only advances once per day (the deep funnel populates it), so

@@ -23,10 +23,26 @@ export type StrategyName =
   | "random_liquid_universe"
   | "volume_only_ranking";
 
+/**
+ * Which bar a plan is filled on.
+ *
+ *  - "nextSession" (default, the only honest choice for real data): every plan
+ *    is built from the CLOSE of its trading date, so it can only be acted on
+ *    from the next session. The entry order is evaluated against the first bar
+ *    AFTER the plan date; exits walk from the bar after that.
+ *  - "sameBar": fill on the plan date's own bar. This is look-ahead on real data
+ *    (the plan's entry is that bar's close, yet it fills at min(open, close) --
+ *    a price nobody deciding after the close could get; Phase 0G measured it at
+ *    ~+3 points of net return per trade). It exists ONLY because the synthetic
+ *    fixture scenarios are constructed around a same-bar fill.
+ */
+export type EntryConvention = "nextSession" | "sameBar";
+
 export interface ReplayBatchOptions {
   dataSource: ReplayDataSource;
   config: StrategyConfig;
   simulation?: SimulationOptions;
+  entryConvention?: EntryConvention;
   /** How many candidates each baseline selects per day (matches the signal-driven deep-funnel trade-plan cap by default). */
   maxCandidatesPerDay?: number;
   /** Seed for the random-liquid-universe baseline's PRNG; fixed by default for reproducibility. */
@@ -52,14 +68,21 @@ async function simulateForDate(
   dataSource: ReplayDataSource,
   config: StrategyConfig,
   simulation: SimulationOptions | undefined,
-  plans: TradePlan[]
+  plans: TradePlan[],
+  entryConvention: EntryConvention
 ): Promise<TradeOutcome[]> {
   const outcomes: TradeOutcome[] = [];
   const maxHoldingBars = simulation?.maxHoldingBars ?? 20;
   for (const plan of plans) {
-    const entryBar = await dataSource.getBarOn(plan.symbol, plan.tradingDate);
-    const simBars = await dataSource.getSimulationBars(plan.symbol, plan.tradingDate, maxHoldingBars);
-    outcomes.push(simulateTradePlan(plan, entryBar, simBars, config, simulation));
+    if (entryConvention === "sameBar") {
+      const entryBar = await dataSource.getBarOn(plan.symbol, plan.tradingDate);
+      const simBars = await dataSource.getSimulationBars(plan.symbol, plan.tradingDate, maxHoldingBars);
+      outcomes.push(simulateTradePlan(plan, entryBar, simBars, config, simulation));
+    } else {
+      // first bar after the plan date is the entry session; the walk starts after it
+      const after = await dataSource.getSimulationBars(plan.symbol, plan.tradingDate, maxHoldingBars + 1);
+      outcomes.push(simulateTradePlan(plan, after[0] ?? null, after.slice(1), config, simulation));
+    }
   }
   return outcomes;
 }
@@ -75,6 +98,7 @@ export async function runReplayBatch(options: ReplayBatchOptions): Promise<Repla
   const { dataSource, config } = options;
   const maxCandidatesPerDay = options.maxCandidatesPerDay ?? config.funnel.deepFunnelTradePlanMax;
   const randomSeed = options.randomSeed ?? 42;
+  const entryConvention: EntryConvention = options.entryConvention ?? "nextSession";
 
   const allDates = await dataSource.listTradingDates();
   const tradingDates = allDates.filter(
@@ -89,7 +113,7 @@ export async function runReplayBatch(options: ReplayBatchOptions): Promise<Repla
   for (const date of tradingDates) {
     // --- signal-driven: replay plans already persisted for this date ---
     const persistedPlans = (await dataSource.getTradePlansForDate(date)).filter((p) => !p.isNoTrade);
-    signalOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, persistedPlans)));
+    signalOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, persistedPlans, entryConvention)));
 
     // --- baselines: build candidates purely from liquidity/volume, no broker-flow/score logic ---
     const universe = await dataSource.listUniverseAsOf(date);
@@ -111,10 +135,10 @@ export async function runReplayBatch(options: ReplayBatchOptions): Promise<Repla
     };
 
     const randomPlans = randomLiquidUniverseStrategy(baseDeps, randomSeed + hashDate(date));
-    randomOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, randomPlans)));
+    randomOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, randomPlans, entryConvention)));
 
     const volumePlans = volumeOnlyRankingStrategy(baseDeps);
-    volumeOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, volumePlans)));
+    volumeOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, volumePlans, entryConvention)));
 
     // --- signal-from-history: reconstruct FeatureEngineInput as-of `date`
     // and run the real scoring engine (only if the data source can serve
@@ -129,7 +153,7 @@ export async function runReplayBatch(options: ReplayBatchOptions): Promise<Repla
         config,
         maxCandidates: maxCandidatesPerDay
       });
-      signalFromHistoryOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, sfhPlans)));
+      signalFromHistoryOutcomes.push(...(await simulateForDate(dataSource, config, options.simulation, sfhPlans, entryConvention)));
     }
   }
 

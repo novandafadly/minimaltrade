@@ -39,6 +39,8 @@ async function main() {
   if (!dbUrl) throw new Error("DATABASE_URL required");
   const topK = Number(get("top") ?? 40); // widen the candidate pool vs the 3/day baseline
   const maxHold = 20;
+  // Honest by default: fill on the NEXT session (see docs/BACKTEST_PHASE0G.md); `--entry=sameBar` = legacy look-ahead.
+  const nextSession = get("entry") !== "sameBar";
   const { createDbClient } = await import("@idx/db");
   const src = new PostgresDataSource(createDbClient(dbUrl));
 
@@ -70,8 +72,14 @@ async function main() {
     const barOn = new Map<string, OhlcvBar | null>();
     const simBars = new Map<string, OhlcvBar[]>();
     for (const c of candidates) {
-      barOn.set(c.symbol, await src.getBarOn(c.symbol, date));
-      simBars.set(c.symbol, await src.getSimulationBars(c.symbol, date, maxHold));
+      if (nextSession) {
+        const after = await src.getSimulationBars(c.symbol, date, maxHold + 1);
+        barOn.set(c.symbol, after[0] ?? null);
+        simBars.set(c.symbol, after.slice(1));
+      } else {
+        barOn.set(c.symbol, await src.getBarOn(c.symbol, date));
+        simBars.set(c.symbol, await src.getSimulationBars(c.symbol, date, maxHold));
+      }
     }
     days.push({ date, sessionEndIso: `${date}T08:49:00.000Z`, candidates, barOn, simBars });
     if (days.length % 20 === 0) process.stderr.write(`  ${days.length}/${dates.length}\n`);
