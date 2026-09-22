@@ -6,6 +6,7 @@ import { LoadingState, ErrorState } from "./StatePanels";
 import type { FundamentalCategory, FundamentalRow, FundamentalsResponse } from "../lib/types";
 
 const CATEGORY_LABEL: Record<FundamentalCategory, string> = {
+  best_overall: "Best of the best",
   growth: "Growth",
   value: "Value",
   quality: "Quality",
@@ -14,6 +15,8 @@ const CATEGORY_LABEL: Record<FundamentalCategory, string> = {
 };
 
 const CATEGORY_BLURB: Record<FundamentalCategory, string> = {
+  best_overall:
+    "Not another independent flag — a single composite rank (mean percentile of ROE, book-to-price, earnings-to-price and NI growth) among Quality-passing names that have ALL four numbers available, sorted best-first. Scores well across value, quality AND growth at once, not just one of them — capped to the top 15.",
   growth: "Earnings growth (YoY) in the top third of the universe, and positive.",
   value: "Cheap relative to book value (top third) AND currently profitable — not cheap because something is broken.",
   quality: "Hygiene only: trailing 4-quarter net income > 0, operating cash flow > 0, ROE > 0.",
@@ -21,7 +24,7 @@ const CATEGORY_BLURB: Record<FundamentalCategory, string> = {
   caution: "The mirror image: a top-decile 20-day price rally WITHOUT earnings growth or quality behind it — priced up without fundamentals to support it."
 };
 
-const CATEGORY_ORDER: FundamentalCategory[] = ["hidden_gem", "growth", "value", "quality", "caution"];
+const CATEGORY_ORDER: FundamentalCategory[] = ["best_overall", "hidden_gem", "growth", "value", "quality", "caution"];
 
 function pct(n: number | null, d = 1): string {
   return n === null || !Number.isFinite(n) ? "—" : `${(n * 100).toFixed(d)}%`;
@@ -44,6 +47,7 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
         <thead>
           <tr>
             <th>Symbol</th>
+            <th>Score</th>
             <th>Sector</th>
             <th>Price (as of)</th>
             <th>Mkt cap</th>
@@ -60,6 +64,7 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
           {rows.map((r) => (
             <tr key={r.symbol}>
               <td>{r.symbol}</td>
+              <td>{r.compositeScore === null ? "—" : r.compositeScore.toFixed(0)}</td>
               <td>{r.sector ?? "—"}</td>
               <td>
                 {r.close.toLocaleString("id-ID")} <span className="price-as-of">({r.priceAsOf})</span>
@@ -83,7 +88,7 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
 }
 
 function FundamentalsBody({ data }: { data: FundamentalsResponse }) {
-  const [tab, setTab] = useState<FundamentalCategory>("hidden_gem");
+  const [tab, setTab] = useState<FundamentalCategory>("best_overall");
   const symbols = data.categories[tab] ?? [];
   const rows = symbols.map((s) => data.rows[s]).filter((r): r is FundamentalRow => !!r);
 

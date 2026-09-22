@@ -27,14 +27,21 @@ export const runtime = "nodejs";
  *
  * Categories (cross-sectional, relative to today's universe — a plain ">0" cutoff
  * would pass almost everyone, the same bug fixed in watchlist.ts's FLOW flag):
- *  - growth:      NIyoy in the top third AND > 0 (earnings actually accelerating)
- *  - value:       BP (book/price) in the top third AND profitable (EP > 0) — cheap
- *                 AND earning money, not just cheap because something is broken
- *  - quality:     hygiene only — TTM net income > 0, TTM operating cash flow > 0, ROE > 0
- *  - hidden_gem:  quality AND value AND below-median market cap AND below-median
- *                 20-day return — fundamentally fine, cheap, small, hasn't rallied yet
- *  - caution:     the mirror image — top-decile 20-day return WITHOUT NIyoy or quality
- *                 support (priced up without earnings behind it)
+ *  - growth:       NIyoy in the top third AND > 0 (earnings actually accelerating)
+ *  - value:        BP (book/price) in the top third AND profitable (EP > 0) — cheap
+ *                  AND earning money, not just cheap because something is broken
+ *  - quality:      hygiene only — TTM net income > 0, TTM operating cash flow > 0, ROE > 0
+ *  - hidden_gem:   quality AND value AND below-median market cap AND below-median
+ *                  20-day return — fundamentally fine, cheap, small, hasn't rallied yet
+ *  - caution:      the mirror image — top-decile 20-day return WITHOUT NIyoy or quality
+ *                  support (priced up without earnings behind it)
+ *  - best_overall: NOT another independent flag — a single COMPOSITE rank (mean
+ *                  percentile of ROE, BP, EP, NIyoy) among quality-passing names only,
+ *                  sorted best-first and capped to BEST_OVERALL_MAX names. "Best of the
+ *                  best": scores well across value, quality AND growth AT ONCE, not just
+ *                  one of them. Requires every one of those four metrics present (no
+ *                  partial-data names) so a name can't rank highly on one strong number
+ *                  while the rest are simply unknown.
  */
 
 const PUBLICATION_LAG_DAYS = 90;
@@ -119,8 +126,13 @@ interface Row {
   bp: number | null;
   ep: number | null;
   quality: boolean | null;
+  /** mean percentile rank of ROE, BP, EP, NIyoy — null unless all four are present. See
+   * best_overall in the module docstring. Not itself a category flag. */
+  compositeScore: number | null;
   flags: string[];
 }
+
+const BEST_OVERALL_MAX = 15;
 
 export async function GET() {
   try {
@@ -291,6 +303,7 @@ export async function GET() {
         bp,
         ep,
         quality,
+        compositeScore: null,
         flags: []
       });
     }
@@ -298,6 +311,8 @@ export async function GET() {
     // cross-sectional percentile cutoffs (relative, not absolute >0 — see module docstring)
     const niYoySorted = rows.map((r) => r.niYoy).filter((v): v is number => v !== null).sort((a, b) => a - b);
     const bpSorted = rows.map((r) => r.bp).filter((v): v is number => v !== null).sort((a, b) => a - b);
+    const epSorted = rows.map((r) => r.ep).filter((v): v is number => v !== null).sort((a, b) => a - b);
+    const roeSorted = rows.map((r) => r.roe).filter((v): v is number => v !== null).sort((a, b) => a - b);
     const mcapSorted = rows.map((r) => r.marketCap).filter((v): v is number => v !== null).sort((a, b) => a - b);
     const ret20Sorted = rows.map((r) => r.ret20).filter((v): v is number => v !== null).sort((a, b) => a - b);
     const medianMcap = mcapSorted.length ? mcapSorted[Math.floor(mcapSorted.length / 2)]! : NaN;
@@ -308,10 +323,13 @@ export async function GET() {
     const quality: string[] = [];
     const hiddenGem: string[] = [];
     const caution: string[] = [];
+    const bestOverallCandidates: { symbol: string; score: number }[] = [];
 
     for (const r of rows) {
       const niYoyPct = r.niYoy !== null ? percentileRank(niYoySorted, r.niYoy) : NaN;
       const bpPct = r.bp !== null ? percentileRank(bpSorted, r.bp) : NaN;
+      const epPct = r.ep !== null ? percentileRank(epSorted, r.ep) : NaN;
+      const roePct = r.roe !== null ? percentileRank(roeSorted, r.roe) : NaN;
       const ret20Pct = r.ret20 !== null ? percentileRank(ret20Sorted, r.ret20) : NaN;
 
       const isGrowth = r.niYoy !== null && r.niYoy > 0 && niYoyPct >= 2 / 3;
@@ -342,9 +360,22 @@ export async function GET() {
         r.flags.push("caution");
         caution.push(r.symbol);
       }
+
+      // best_overall: requires ALL FOUR components present (a name can't rank on one
+      // strong number while the rest are unknown) AND the quality hygiene gate, then
+      // ranks by the mean percentile across value (BP, EP), quality (ROE) and growth
+      // (NIyoy) at once.
+      if (r.quality === true && r.roe !== null && r.bp !== null && r.ep !== null && r.niYoy !== null) {
+        const score = (roePct + bpPct + epPct + niYoyPct) / 4;
+        r.compositeScore = Number((score * 100).toFixed(1));
+        bestOverallCandidates.push({ symbol: r.symbol, score });
+      }
     }
 
+    bestOverallCandidates.sort((a, b) => b.score - a.score);
+    const bestOverall = bestOverallCandidates.slice(0, BEST_OVERALL_MAX).map((c) => c.symbol);
     const bySymbol = Object.fromEntries(rows.map((r) => [r.symbol, r]));
+    for (const s of bestOverall) bySymbol[s]?.flags.push("best_overall");
 
     return NextResponse.json({
       asOf: asOf ?? null,
@@ -354,6 +385,7 @@ export async function GET() {
         fundamentals: rows.filter((r) => r.quality !== null).length
       },
       categories: {
+        best_overall: bestOverall, // already ranked best-first — do NOT alphabetize
         growth: growth.sort(),
         value: value.sort(),
         quality: quality.sort(),
@@ -369,7 +401,7 @@ export async function GET() {
         error: "fundamentals_query_failed",
         message: err instanceof Error ? err.message : "unknown error",
         universe: 0,
-        categories: { growth: [], value: [], quality: [], hidden_gem: [], caution: [] },
+        categories: { best_overall: [], growth: [], value: [], quality: [], hidden_gem: [], caution: [] },
         rows: {}
       },
       { status: 500 }
