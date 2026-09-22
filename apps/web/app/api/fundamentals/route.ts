@@ -30,7 +30,8 @@ export const runtime = "nodejs";
  *  - growth:       NIyoy in the top third AND > 0 (earnings actually accelerating)
  *  - value:        BP (book/price) in the top third AND profitable (EP > 0) — cheap
  *                  AND earning money, not just cheap because something is broken
- *  - quality:      hygiene only — TTM net income > 0, TTM operating cash flow > 0, ROE > 0
+ *  - quality:      hygiene only — TTM net income > 0, TTM operating cash flow > 0, ROE > 0,
+ *                  AND (non-bank only) debt-to-equity not excessive (see LEVERAGE below)
  *  - hidden_gem:   quality AND value AND below-median market cap AND below-median
  *                  20-day return — fundamentally fine, cheap, small, hasn't rallied yet
  *  - caution:      the mirror image — top-decile 20-day return WITHOUT NIyoy or quality
@@ -42,6 +43,23 @@ export const runtime = "nodejs";
  *                  one of them. Requires every one of those four metrics present (no
  *                  partial-data names) so a name can't rank highly on one strong number
  *                  while the rest are simply unknown.
+ *
+ * LEVERAGE (DER). ROE alone can be misleading: a thin equity base inflates it without the
+ * company being more productive (this dataset's own UNVR showed ROE 130% — a leverage/
+ * buyback artifact, not organic profitability). der = (assets - equity) / equity, derived
+ * from the balance-sheet identity (assets = liabilities + equity) using the SAME equity
+ * figure as BP/EP/ROE (equity attributable to the parent, excluding NCI — so `der` slightly
+ * overstates leverage for names with material non-controlling interests; disclosed, not
+ * fixed, to stay consistent with the rest of this route's methodology). The quality gate
+ * rejects der > DER_MAX_NONBANK for non-banks; banks are structurally leveraged by the
+ * nature of the business (deposits are liabilities) so the DER gate does not apply to them.
+ *
+ * BANK VS NON-BANK. Banks' financial-statement layout differs completely (see
+ * `liabilitas_dana_syirkah_temporer_dan_ekuitas` below) and their ROE/BP/EP/NIyoy are not
+ * comparable to industrials/consumer/etc — mixing them in one percentile ranking unfairly
+ * penalizes or flatters one group (this is exactly why Phase 0I reports "all" and
+ * "non-bank" separately). ROE/BP/EP/NIyoy percentiles here are computed within each name's
+ * OWN peer group (bank vs non-bank), not the whole universe.
  */
 
 const PUBLICATION_LAG_DAYS = 90;
@@ -95,6 +113,16 @@ function percentileRank(sorted: number[], v: number): number {
   return sorted.length ? lo / sorted.length : NaN;
 }
 
+/** Peer group: banks and non-banks have structurally different ROE/BP/EP/NIyoy (see
+ * BANK VS NON-BANK in the module docstring), so each is ranked against its own group. */
+interface PeerSorted {
+  bank: number[];
+  nonBank: number[];
+}
+function peerPercentile(peer: PeerSorted, isBank: boolean, v: number | null): number {
+  return v === null ? NaN : percentileRank(isBank ? peer.bank : peer.nonBank, v);
+}
+
 interface Q {
   ni?: number;
   assets?: number;
@@ -121,6 +149,10 @@ interface Row {
   niTtm: number | null;
   ocfTtm: number | null;
   equity: number | null;
+  isBank: boolean;
+  /** (assets - equity) / equity, derived from the balance-sheet identity. null if assets
+   * or equity is unavailable, or not meaningful (assets <= equity). See module docstring. */
+  der: number | null;
   roe: number | null;
   niYoy: number | null;
   bp: number | null;
@@ -133,6 +165,10 @@ interface Row {
 }
 
 const BEST_OVERALL_MAX = 15;
+// Debt-to-equity cap for the quality gate (non-bank only) — 2.0 (200%) is a generous
+// upper bound for IDX non-financials; above it, leverage is doing more of the work than
+// the business. Not applied to banks (leverage is structural to the business model).
+const DER_MAX_NONBANK = 2.0;
 
 export async function GET() {
   try {
@@ -169,6 +205,7 @@ export async function GET() {
         order by endpoint, symbol, received_at desc`)
     );
     const ni = new Map<string, Map<number, Q>>();
+    const isBankSym = new Set<string>();
     for (const r of st) {
       const sym = String(r.symbol);
       const isIncome = String(r.endpoint).includes("INCOME_STATEMENT");
@@ -189,6 +226,12 @@ export async function GET() {
           ]);
           if (v !== null) q.ni = v;
         } else if (isBalance) {
+          // Banks report under `liabilitas_dana_syirkah_temporer_dan_ekuitas` (a sharia
+          // banking disclosure requirement), not `liabilitas_dan_ekuitas` — that alone
+          // distinguishes the layout, matching phase0i.ts's isBank detection.
+          if (d && typeof d === "object" && "liabilitas_dana_syirkah_temporer_dan_ekuitas" in d) isBankSym.add(sym);
+          const a = path(d, "aset.total");
+          if (a !== null) q.assets = a;
           const e = firstPath(d, [
             "liabilitas_dan_ekuitas.ekuitas.ekuitas_yang_diatribusikan_kepada_pemilik_entitas_induk.total",
             "liabilitas_dan_ekuitas.ekuitas.total",
@@ -224,6 +267,16 @@ export async function GET() {
         if (qEndDate(year, quarter).getTime() + PUBLICATION_LAG_DAYS * 86400000 <= asOfDate.getTime() && k > L) L = k;
       }
       return L < 0 ? null : (m.get(L)?.equity ?? null);
+    };
+    const latestAssets = (m: Map<number, Q> | undefined): number | null => {
+      if (!m) return null;
+      let L = -1;
+      for (const k of m.keys()) {
+        const year = Math.floor(k / 4);
+        const quarter = (k % 4) + 1;
+        if (qEndDate(year, quarter).getTime() + PUBLICATION_LAG_DAYS * 86400000 <= asOfDate.getTime() && k > L) L = k;
+      }
+      return L < 0 ? null : (m.get(L)?.assets ?? null);
     };
     const niYoyOf = (m: Map<number, Q> | undefined): number | null => {
       if (!m) return null;
@@ -264,15 +317,22 @@ export async function GET() {
 
       const yfRow = yfBySym.get(symbol) ?? {};
       const m = ni.get(symbol);
+      const isBank = isBankSym.has(symbol);
       const niTtm = ttmOf(m, "ni");
       const ocfTtm = ttmOf(m, "ocf");
       const equity = latestEquity(m);
+      const assets = latestAssets(m);
+      const der = assets !== null && equity !== null && equity > 0 && assets > equity ? (assets - equity) / equity : null;
       const roe = niTtm !== null && equity && equity > 0 ? niTtm / equity : null;
       const niYoy = niYoyOf(m);
       const marketCap = typeof yfRow.marketCap === "number" ? yfRow.marketCap : null;
       const bp = equity && equity > 0 && marketCap && marketCap > 0 ? equity / marketCap : null;
       const ep = niTtm !== null && marketCap && marketCap > 0 ? niTtm / marketCap : null;
-      const quality = niTtm === null || ocfTtm === null || roe === null ? null : niTtm > 0 && ocfTtm > 0 && roe > 0;
+      // Quality hygiene: profitable + cash-generative + positive ROE, and (non-bank only)
+      // not excessively leveraged — see LEVERAGE in the module docstring.
+      const leverageOk = isBank || der === null || der <= DER_MAX_NONBANK;
+      const quality =
+        niTtm === null || ocfTtm === null || roe === null ? null : niTtm > 0 && ocfTtm > 0 && roe > 0 && leverageOk;
 
       rows.push({
         symbol,
@@ -298,6 +358,8 @@ export async function GET() {
         niTtm,
         ocfTtm,
         equity,
+        isBank,
+        der,
         roe,
         niYoy,
         bp,
@@ -308,11 +370,17 @@ export async function GET() {
       });
     }
 
-    // cross-sectional percentile cutoffs (relative, not absolute >0 — see module docstring)
-    const niYoySorted = rows.map((r) => r.niYoy).filter((v): v is number => v !== null).sort((a, b) => a - b);
-    const bpSorted = rows.map((r) => r.bp).filter((v): v is number => v !== null).sort((a, b) => a - b);
-    const epSorted = rows.map((r) => r.ep).filter((v): v is number => v !== null).sort((a, b) => a - b);
-    const roeSorted = rows.map((r) => r.roe).filter((v): v is number => v !== null).sort((a, b) => a - b);
+    // cross-sectional percentile cutoffs (relative, not absolute >0 — see module docstring).
+    // ROE/BP/EP/NIyoy are peer-scoped (bank vs non-bank, see BANK VS NON-BANK above); price
+    // return and size are not accounting-structure-dependent, so those stay universe-wide.
+    const splitSorted = (pick: (r: Row) => number | null): PeerSorted => ({
+      bank: rows.filter((r) => r.isBank).map(pick).filter((v): v is number => v !== null).sort((a, b) => a - b),
+      nonBank: rows.filter((r) => !r.isBank).map(pick).filter((v): v is number => v !== null).sort((a, b) => a - b)
+    });
+    const niYoyPeer = splitSorted((r) => r.niYoy);
+    const bpPeer = splitSorted((r) => r.bp);
+    const epPeer = splitSorted((r) => r.ep);
+    const roePeer = splitSorted((r) => r.roe);
     const mcapSorted = rows.map((r) => r.marketCap).filter((v): v is number => v !== null).sort((a, b) => a - b);
     const ret20Sorted = rows.map((r) => r.ret20).filter((v): v is number => v !== null).sort((a, b) => a - b);
     const medianMcap = mcapSorted.length ? mcapSorted[Math.floor(mcapSorted.length / 2)]! : NaN;
@@ -326,10 +394,10 @@ export async function GET() {
     const bestOverallCandidates: { symbol: string; score: number }[] = [];
 
     for (const r of rows) {
-      const niYoyPct = r.niYoy !== null ? percentileRank(niYoySorted, r.niYoy) : NaN;
-      const bpPct = r.bp !== null ? percentileRank(bpSorted, r.bp) : NaN;
-      const epPct = r.ep !== null ? percentileRank(epSorted, r.ep) : NaN;
-      const roePct = r.roe !== null ? percentileRank(roeSorted, r.roe) : NaN;
+      const niYoyPct = peerPercentile(niYoyPeer, r.isBank, r.niYoy);
+      const bpPct = peerPercentile(bpPeer, r.isBank, r.bp);
+      const epPct = peerPercentile(epPeer, r.isBank, r.ep);
+      const roePct = peerPercentile(roePeer, r.isBank, r.roe);
       const ret20Pct = r.ret20 !== null ? percentileRank(ret20Sorted, r.ret20) : NaN;
 
       const isGrowth = r.niYoy !== null && r.niYoy > 0 && niYoyPct >= 2 / 3;

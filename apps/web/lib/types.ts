@@ -215,6 +215,10 @@ export interface FundamentalRow {
   niTtm: number | null;
   ocfTtm: number | null;
   equity: number | null;
+  isBank: boolean;
+  /** (assets - equity) / equity. null if unavailable. ROE/BP/EP/NIyoy percentiles and the
+   * quality gate's leverage check are peer-scoped by this (bank vs non-bank). */
+  der: number | null;
   roe: number | null;
   niYoy: number | null;
   bp: number | null;
