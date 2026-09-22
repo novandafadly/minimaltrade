@@ -17,7 +17,8 @@ const CATEGORY_LABEL: Record<FundamentalCategory, string> = {
 const CATEGORY_BLURB: Record<FundamentalCategory, string> = {
   best_overall:
     "Not another independent flag — a single composite rank (mean percentile of ROE, book-to-price, earnings-to-price and NI growth) among Quality-passing names that have ALL four numbers available, sorted best-first. Scores well across value, quality AND growth at once, not just one of them — capped to the top 15.",
-  growth: "Earnings growth (YoY) in the top third of the universe, and positive.",
+  growth:
+    "Revenue growth (YoY) in the top third of the universe AND positive, AND earnings also growing — revenue is the primary signal now (steadier than net income alone, which a one-off gain or loss can swing). Non-bank only: ARJUM has no single revenue line for banks in this format.",
   value: "Cheap relative to book value (top third) AND currently profitable — not cheap because something is broken.",
   quality:
     "Hygiene only: trailing 4-quarter net income > 0, operating cash flow > 0, ROE > 0, and (non-banks only) debt-to-equity not excessive — a thin equity base can inflate ROE without the business actually being more productive.",
@@ -54,7 +55,9 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
             <th>Mkt cap</th>
             <th>ROE</th>
             <th>DER</th>
+            <th>Rev YoY</th>
             <th>NI YoY</th>
+            <th>Margin Δ (YoY)</th>
             <th>P/E (TTM)</th>
             <th>P/B</th>
             <th>20d ret</th>
@@ -77,7 +80,19 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
               <td>{rupiahCompact(r.marketCap)}</td>
               <td>{pct(r.roe)}</td>
               <td>{r.isBank ? "n/a (bank)" : num(r.der, 2)}</td>
+              <td>{r.isBank ? "n/a (bank)" : pct(r.revYoy)}</td>
               <td>{pct(r.niYoy)}</td>
+              <td
+                className={
+                  r.marginTrendPP !== null && r.marginTrendPP !== 0
+                    ? r.marginTrendPP > 0
+                      ? "positive-result"
+                      : "negative-result"
+                    : ""
+                }
+              >
+                {r.isBank ? "n/a (bank)" : r.marginTrendPP === null ? "—" : `${r.marginTrendPP >= 0 ? "+" : ""}${(r.marginTrendPP * 100).toFixed(1)}pp`}
+              </td>
               <td>{num(r.trailingPE)}</td>
               <td>{num(r.priceToBook)}</td>
               <td className={r.ret20 !== null && r.ret20 !== 0 ? (r.ret20 > 0 ? "positive-result" : "negative-result") : ""}>
@@ -117,7 +132,11 @@ function FundamentalsBody({ data }: { data: FundamentalsResponse }) {
         (banks vs everyone else) — banks' financial statements are structured completely
         differently and their ratios aren't comparable to industrials or consumer names, so
         a bank is only ranked against other banks. Debt-to-equity is shown for context but
-        not applied to banks (leverage is structural to how banks operate).
+        not applied to banks (leverage is structural to how banks operate). Revenue growth
+        and the margin trend (gross margin vs a year ago) are also non-bank only — ARJUM
+        doesn't expose a single revenue/cost-of-sales line for banks in this format. Margin
+        trend is informational only: unlike debt-to-equity, there's no tested threshold for
+        how much margin compression should disqualify a name, so it isn't gated.
       </p>
 
       <nav className="view-tabs">

@@ -37,7 +37,7 @@ these are percentile-based against the day's universe.
 | category | rule |
 |---|---|
 | best_overall | **not another independent flag** — mean percentile rank of ROE, BP, EP and NIyoy among Quality-passing names with all four present, sorted best-first, capped to the top 15 |
-| growth | earnings growth YoY (NIyoy) in the top third, and positive |
+| growth | revenue growth YoY (RevYoy) in the top third AND positive, AND net income growth also positive — non-bank only |
 | value | book-to-price in the top third AND currently profitable (EP > 0) |
 | quality | hygiene only: TTM net income > 0, TTM operating cash flow > 0, ROE > 0, AND (non-banks only) debt-to-equity not excessive |
 | hidden_gem | quality AND value AND below-median market cap AND below-median 20-day return |
@@ -61,8 +61,27 @@ Two gaps fixed after the first version shipped:
   vs `liabilitas_dan_ekuitas` for everyone else) and their ROE/BP/EP/NIyoy aren't comparable
   to industrials or consumer names — mixing them in one percentile ranking unfairly penalizes
   or flatters one group. This is exactly why [Phase 0I](BACKTEST_PHASE0I.md) reports "all"
-  and "non-bank" separately. ROE/BP/EP/NIyoy percentiles here are computed within each name's
-  own peer group (bank vs non-bank), not the whole universe.
+  and "non-bank" separately. ROE/BP/EP/NIyoy/RevYoy percentiles here are computed within each
+  name's own peer group (bank vs non-bank), not the whole universe.
+
+## Revenue growth and margin trend
+
+A third gap: net income alone is noisy — a one-off gain (FX, asset sale) or a one-off loss
+can swing NIyoy without the underlying business actually accelerating or decelerating.
+
+- **RevYoy** (revenue this quarter vs the same quarter a year ago, from
+  `penjualan_dan_pendapatan_usaha`) is a steadier growth signal and is now what `growth`
+  primarily keys on; NIyoy is kept as a confirming check (profit should follow revenue, not
+  diverge from it).
+- **marginTrendPP** (gross margin this quarter minus gross margin the same quarter a year
+  ago, in percentage points, from revenue and `beban_pokok_penjualan_dan_pendapatan`) is
+  shown for context on every non-bank row but does **not** gate any category — unlike DER's
+  cap, there's no defensible threshold for "how much margin compression is too much" without
+  testing it, so this stays informational rather than another unvalidated cutoff.
+
+Both fields are ARJUM-only for non-banks (verified across TLKM/ANTM/ICBP/ASII): banks don't
+report a single revenue/COGS line in this format, so `revYoy`/`marginTrendPP` are null for
+banks and bank names cannot qualify for `growth`.
 
 ## Refreshing the Yahoo Finance data
 
