@@ -162,7 +162,10 @@ export interface ShadowSourceStats {
   winRate: number;
   netPnl: number;
   expectancy: number;
-  profitFactor: number;
+  /** null means "no losing trades yet" (infinite profit factor) — JSON has no Infinity,
+   * so the API sends null explicitly rather than relying on JSON.stringify's silent
+   * Infinity -> null coercion (which would leave this looking like a real number). */
+  profitFactor: number | null;
 }
 
 export interface ShadowRecentRow {

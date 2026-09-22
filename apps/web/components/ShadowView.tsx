@@ -48,6 +48,16 @@ function pnlClass(n: number | null): string {
   return n > 0 ? "positive-result" : "negative-result";
 }
 
+// profitFactor is null when there are no losing trades yet (a genuinely infinite ratio;
+// JSON has no Infinity, see app/api/shadow/route.ts). pfValue treats it as +Infinity for
+// ordering comparisons; pfLabel renders it as "∞".
+export function pfValue(n: number | null): number {
+  return n === null ? Infinity : n;
+}
+export function pfLabel(n: number | null): string {
+  return n === null ? "∞" : n.toFixed(2);
+}
+
 const MIN_EVAL = 20;
 
 function verdict(stats: ShadowSourceStats[]): string {
@@ -68,13 +78,13 @@ function verdict(stats: ShadowSourceStats[]): string {
   const label = SOURCE_LABEL[bestScreener.source] ?? bestScreener.source;
   const beatsAllBaselines = baselines
     .filter(ready)
-    .every((b) => bestScreener.expectancy > b.expectancy && bestScreener.profitFactor > b.profitFactor);
+    .every((b) => bestScreener.expectancy > b.expectancy && pfValue(bestScreener.profitFactor) > pfValue(b.profitFactor));
 
   if (!beatsAllBaselines) {
     return `No screener beats the random/volume baselines yet on expectancy + profit factor. The ARJUM shortlist and the technical screen are not (yet) proven to add value over picking liquid names at random.`;
   }
 
-  let msg = `Best screener so far: ${label} (expectancy ${rupiah(bestScreener.expectancy)}/plan, PF ${bestScreener.profitFactor === Infinity ? "∞" : bestScreener.profitFactor.toFixed(2)}) — beats both baselines.`;
+  let msg = `Best screener so far: ${label} (expectancy ${rupiah(bestScreener.expectancy)}/plan, PF ${pfLabel(bestScreener.profitFactor)}) — beats both baselines.`;
   if (ready(live)) {
     if (live!.expectancy > bestScreener.expectancy) {
       msg += ` The full engine (live) still beats it — the composite score is adding value on top of the screener.`;
@@ -146,7 +156,7 @@ export function ShadowView() {
                   <td className={pnlClass(s.evaluated ? s.expectancy : null)}>
                     {s.evaluated ? rupiah(s.expectancy) : "—"}
                   </td>
-                  <td>{s.evaluated ? (s.profitFactor === Infinity ? "∞" : s.profitFactor.toFixed(2)) : "—"}</td>
+                  <td>{s.evaluated ? pfLabel(s.profitFactor) : "—"}</td>
                   <td className={pnlClass(s.evaluated ? s.netPnl : null)}>
                     {s.evaluated ? rupiah(s.netPnl) : "—"}
                   </td>
