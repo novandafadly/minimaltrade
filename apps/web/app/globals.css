@@ -645,3 +645,16 @@ select {
   font-size: 10px;
   color: var(--muted-foreground, #999);
 }
+.sortable-header {
+  all: unset;
+  cursor: pointer;
+  white-space: nowrap;
+  font: inherit;
+  color: inherit;
+}
+.sortable-header:hover {
+  text-decoration: underline;
+}
+.sort-arrow {
+  font-size: 9px;
+}

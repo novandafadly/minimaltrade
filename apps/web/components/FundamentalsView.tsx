@@ -41,32 +41,105 @@ function rupiahCompact(n: number | null): string {
   return `Rp${Math.round(n).toLocaleString("id-ID")}`;
 }
 
+// recommendationKey values Yahoo returns, ordered worst -> best so sorting the Analyst
+// column is meaningful (plain string sort would put "buy" before "sell" alphabetically).
+const RECOMMENDATION_RANK: Record<string, number> = {
+  strong_sell: 0,
+  sell: 1,
+  underperform: 1,
+  hold: 2,
+  none: 2,
+  buy: 3,
+  outperform: 3,
+  strong_buy: 4
+};
+
+type SortableValue = string | number | boolean | null;
+type ColumnKey =
+  | "symbol"
+  | "compositeScore"
+  | "sector"
+  | "priceAsOf"
+  | "marketCap"
+  | "roe"
+  | "der"
+  | "revYoy"
+  | "niYoy"
+  | "marginTrendPP"
+  | "trailingPE"
+  | "priceToBook"
+  | "ret20"
+  | "quality"
+  | "recommendationKey";
+
+const COLUMNS: { key: ColumnKey; label: string; get: (r: FundamentalRow) => SortableValue }[] = [
+  { key: "symbol", label: "Symbol", get: (r) => r.symbol },
+  { key: "compositeScore", label: "Score", get: (r) => r.compositeScore },
+  { key: "sector", label: "Sector", get: (r) => r.sector },
+  { key: "priceAsOf", label: "Price (as of)", get: (r) => r.close },
+  { key: "marketCap", label: "Mkt cap", get: (r) => r.marketCap },
+  { key: "roe", label: "ROE", get: (r) => r.roe },
+  { key: "der", label: "DER", get: (r) => (r.isBank ? null : r.der) },
+  { key: "revYoy", label: "Rev YoY", get: (r) => (r.isBank ? null : r.revYoy) },
+  { key: "niYoy", label: "NI YoY", get: (r) => r.niYoy },
+  { key: "marginTrendPP", label: "Margin Δ (YoY)", get: (r) => (r.isBank ? null : r.marginTrendPP) },
+  { key: "trailingPE", label: "P/E (TTM)", get: (r) => r.trailingPE },
+  { key: "priceToBook", label: "P/B", get: (r) => r.priceToBook },
+  { key: "ret20", label: "20d ret", get: (r) => r.ret20 },
+  { key: "quality", label: "Quality", get: (r) => r.quality },
+  {
+    key: "recommendationKey",
+    label: "Analyst",
+    get: (r) => (r.recommendationKey ? (RECOMMENDATION_RANK[r.recommendationKey] ?? -1) : null)
+  }
+];
+
+/** nulls always sort last, regardless of direction — an unknown value should never look
+ * like the best (or worst) result just because it's missing. */
+export function compareValues(a: SortableValue, b: SortableValue, dir: 1 | -1): number {
+  if (a === null && b === null) return 0;
+  if (a === null) return 1;
+  if (b === null) return -1;
+  if (typeof a === "string" && typeof b === "string") return dir * a.localeCompare(b);
+  if (typeof a === "boolean" && typeof b === "boolean") return dir * ((a ? 1 : 0) - (b ? 1 : 0));
+  return dir * ((a as number) - (b as number));
+}
+
 function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
+  // Descending by default (biggest/best-labeled first) on the first click of a column;
+  // click again to flip. Resets to the API's given order (best_overall: pre-ranked by
+  // score; others: alphabetical) whenever the parent remounts this on a tab switch.
+  const [sort, setSort] = useState<{ key: ColumnKey; dir: 1 | -1 } | null>(null);
+
   if (rows.length === 0) return <p className="fundamentals-empty">No names in this category today.</p>;
+
+  const sorted = sort
+    ? [...rows].sort((a, b) => {
+        const col = COLUMNS.find((c) => c.key === sort.key)!;
+        return compareValues(col.get(a), col.get(b), sort.dir);
+      })
+    : rows;
+
+  const toggleSort = (key: ColumnKey) =>
+    setSort((s) => (s && s.key === key ? { key, dir: (s.dir * -1) as 1 | -1 } : { key, dir: -1 }));
+
   return (
     <div className="journal-table-wrap">
       <table className="journal-table">
         <thead>
           <tr>
-            <th>Symbol</th>
-            <th>Score</th>
-            <th>Sector</th>
-            <th>Price (as of)</th>
-            <th>Mkt cap</th>
-            <th>ROE</th>
-            <th>DER</th>
-            <th>Rev YoY</th>
-            <th>NI YoY</th>
-            <th>Margin Δ (YoY)</th>
-            <th>P/E (TTM)</th>
-            <th>P/B</th>
-            <th>20d ret</th>
-            <th>Quality</th>
-            <th>Analyst</th>
+            {COLUMNS.map((c) => (
+              <th key={c.key}>
+                <button type="button" className="sortable-header" onClick={() => toggleSort(c.key)}>
+                  {c.label}
+                  {sort?.key === c.key ? <span className="sort-arrow">{sort.dir === 1 ? " ▲" : " ▼"}</span> : null}
+                </button>
+              </th>
+            ))}
           </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {sorted.map((r) => (
             <tr key={r.symbol}>
               <td>
                 {r.symbol}
@@ -136,7 +209,16 @@ function FundamentalsBody({ data }: { data: FundamentalsResponse }) {
         and the margin trend (gross margin vs a year ago) are also non-bank only — ARJUM
         doesn't expose a single revenue/cost-of-sales line for banks in this format. Margin
         trend is informational only: unlike debt-to-equity, there's no tested threshold for
-        how much margin compression should disqualify a name, so it isn't gated.
+        how much margin compression should disqualify a name, so it isn't gated. Click any
+        column header to sort by it (click again to flip direction) — unknown values always
+        sort last, never first, so a missing number can't masquerade as the best result.{" "}
+        <strong>&quot;Score&quot; is not a buy rating</strong> — it's the composite fundamental
+        rank explained above, and Phase 0I found no evidence it (or anything else here)
+        predicts returns. If you're looking for an actual &quot;strong buy&quot; label,
+        that's the <strong>Analyst</strong> column: Yahoo
+        Finance's own aggregated analyst consensus (strong_buy / buy / hold / sell /
+        strong_sell) for that stock — a human-analyst opinion, not something this screen
+        derives, and not verified here either.
       </p>
 
       <nav className="view-tabs">
@@ -149,7 +231,7 @@ function FundamentalsBody({ data }: { data: FundamentalsResponse }) {
 
       <p className="fundamentals-blurb">{CATEGORY_BLURB[tab]}</p>
 
-      <CategoryTable rows={rows} />
+      <CategoryTable key={tab} rows={rows} />
     </div>
   );
 }
