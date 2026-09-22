@@ -28,7 +28,8 @@ interface SourceStats {
   winRate: number;
   netPnl: number;
   expectancy: number; // mean net P&L over evaluated
-  profitFactor: number;
+  /** null = no losing trades yet (infinite profit factor); JSON has no Infinity. */
+  profitFactor: number | null;
 }
 
 export async function GET() {
@@ -65,7 +66,10 @@ export async function GET() {
         winRate: fills.length ? wins.length / fills.length : 0,
         netPnl: Math.round(net),
         expectancy: evaluated.length ? Math.round(net / evaluated.length) : 0,
-        profitFactor: grossLoss > 0 ? Number((grossWin / grossLoss).toFixed(2)) : grossWin > 0 ? Infinity : 0
+        // grossLoss === 0 && grossWin > 0 is a genuinely infinite profit factor, but JSON has
+        // no Infinity (JSON.stringify silently turns it into `null`, which the client would
+        // then read as a real number and crash on .toFixed()) — send null explicitly instead.
+        profitFactor: grossLoss > 0 ? Number((grossWin / grossLoss).toFixed(2)) : grossWin > 0 ? null : 0
       });
     }
     stats.sort((a, b) => a.source.localeCompare(b.source));
