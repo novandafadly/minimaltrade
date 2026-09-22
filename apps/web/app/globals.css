@@ -623,3 +623,25 @@ select {
   font-size: 13px;
   margin: 6px 0 0;
 }
+
+/* --- Fundamentals screener view --- */
+.fundamentals-view {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.fundamentals-blurb {
+  font-size: 12px;
+  color: var(--muted-foreground, #666);
+  margin: 0;
+  font-style: italic;
+}
+.fundamentals-empty {
+  font-size: 13px;
+  color: var(--muted-foreground, #666);
+  padding: 12px 0;
+}
+.price-as-of {
+  font-size: 10px;
+  color: var(--muted-foreground, #999);
+}
