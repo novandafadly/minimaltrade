@@ -221,6 +221,12 @@ export interface FundamentalRow {
   der: number | null;
   roe: number | null;
   niYoy: number | null;
+  /** revenue growth YoY (steadier than niYoy — a one-off gain/loss can't swing it the same
+   * way). null for banks (ARJUM has no single revenue line for them in this format). */
+  revYoy: number | null;
+  /** gross margin this quarter minus the same quarter a year ago, in percentage points.
+   * Informational only, doesn't gate any category. null for banks. */
+  marginTrendPP: number | null;
   bp: number | null;
   ep: number | null;
   quality: boolean | null;

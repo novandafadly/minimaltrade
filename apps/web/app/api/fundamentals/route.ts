@@ -27,7 +27,9 @@ export const runtime = "nodejs";
  *
  * Categories (cross-sectional, relative to today's universe — a plain ">0" cutoff
  * would pass almost everyone, the same bug fixed in watchlist.ts's FLOW flag):
- *  - growth:       NIyoy in the top third AND > 0 (earnings actually accelerating)
+ *  - growth:       REVENUE growth (top line) in the top third AND positive, AND net income
+ *                  also growing — see REVENUE GROWTH below for why NI alone was dropped
+ *                  as the primary signal
  *  - value:        BP (book/price) in the top third AND profitable (EP > 0) — cheap
  *                  AND earning money, not just cheap because something is broken
  *  - quality:      hygiene only — TTM net income > 0, TTM operating cash flow > 0, ROE > 0,
@@ -58,8 +60,23 @@ export const runtime = "nodejs";
  * `liabilitas_dana_syirkah_temporer_dan_ekuitas` below) and their ROE/BP/EP/NIyoy are not
  * comparable to industrials/consumer/etc — mixing them in one percentile ranking unfairly
  * penalizes or flatters one group (this is exactly why Phase 0I reports "all" and
- * "non-bank" separately). ROE/BP/EP/NIyoy percentiles here are computed within each name's
- * OWN peer group (bank vs non-bank), not the whole universe.
+ * "non-bank" separately). ROE/BP/EP/NIyoy/RevYoy percentiles here are computed within each
+ * name's OWN peer group (bank vs non-bank), not the whole universe.
+ *
+ * REVENUE GROWTH (RevYoy) AND MARGIN TREND. Net income alone is noisy — a one-off gain (FX,
+ * asset sale) or a one-off loss can swing NIyoy without the underlying business actually
+ * accelerating or decelerating. `revYoy` (revenue this quarter vs the same quarter a year
+ * ago, from `penjualan_dan_pendapatan_usaha`) is a steadier growth signal and is now what
+ * `growth` primarily keys on; NIyoy is kept as a confirming check (profit should follow
+ * revenue, not diverge from it). `marginTrendPP` (gross margin this quarter minus gross
+ * margin the same quarter a year ago, in percentage points, from revenue and
+ * `beban_pokok_penjualan_dan_pendapatan`) is exposed for context but does NOT gate any
+ * category — unlike DER's cap, there is no defensible threshold for "how much margin
+ * compression is too much" without testing it, so this stays informational rather than
+ * another unvalidated cutoff. Both fields are ARJUM-only for non-banks: banks don't report
+ * a single revenue/COGS line in this format, so `revYoy`/`marginTrendPP` are null for banks
+ * (consistent with DER not applying to banks either) and bank names cannot qualify for
+ * `growth`.
  */
 
 const PUBLICATION_LAG_DAYS = 90;
@@ -128,6 +145,10 @@ interface Q {
   assets?: number;
   equity?: number;
   ocf?: number;
+  /** `penjualan_dan_pendapatan_usaha` — non-bank only, see REVENUE GROWTH in the module docstring. */
+  rev?: number;
+  /** `beban_pokok_penjualan_dan_pendapatan` (already negative) — non-bank only. */
+  cogs?: number;
 }
 
 interface Row {
@@ -155,6 +176,12 @@ interface Row {
   der: number | null;
   roe: number | null;
   niYoy: number | null;
+  /** revenue growth YoY (this quarter vs same quarter a year ago). null for banks. */
+  revYoy: number | null;
+  /** gross margin this quarter minus gross margin the same quarter a year ago, in
+   * percentage points (e.g. 0.023 = +2.3pp). Informational only — see module docstring
+   * for why it doesn't gate a category. null for banks. */
+  marginTrendPP: number | null;
   bp: number | null;
   ep: number | null;
   quality: boolean | null;
@@ -225,6 +252,12 @@ export async function GET() {
             "laba_rugi"
           ]);
           if (v !== null) q.ni = v;
+          // Non-bank only (verified across TLKM/ANTM/ICBP/ASII); absent for banks, which
+          // report interest/fee income under a different structure entirely.
+          const rv = path(d, "penjualan_dan_pendapatan_usaha");
+          if (rv !== null) q.rev = rv;
+          const cg = path(d, "beban_pokok_penjualan_dan_pendapatan");
+          if (cg !== null) q.cogs = cg;
         } else if (isBalance) {
           // Banks report under `liabilitas_dana_syirkah_temporer_dan_ekuitas` (a sharia
           // banking disclosure requirement), not `liabilitas_dan_ekuitas` — that alone
@@ -292,6 +325,37 @@ export async function GET() {
       if (cur === undefined || base === undefined || base === 0) return null;
       return Math.max(-3, Math.min(3, (cur - base) / Math.abs(base)));
     };
+    /** Latest available quarter's index, publication-lag-aware — shared by revYoyOf/marginTrendOf
+     * so both compare the SAME quarter pair (this quarter vs the same quarter a year ago). */
+    const latestQuarterKey = (m: Map<number, Q> | undefined): number => {
+      if (!m) return -1;
+      let L = -1;
+      for (const k of m.keys()) {
+        const year = Math.floor(k / 4);
+        const quarter = (k % 4) + 1;
+        if (qEndDate(year, quarter).getTime() + PUBLICATION_LAG_DAYS * 86400000 <= asOfDate.getTime() && k > L) L = k;
+      }
+      return L;
+    };
+    const revYoyOf = (m: Map<number, Q> | undefined): number | null => {
+      const L = latestQuarterKey(m);
+      if (L < 0) return null;
+      const cur = m!.get(L)?.rev;
+      const base = m!.get(L - 4)?.rev;
+      if (cur === undefined || base === undefined || base === 0) return null;
+      return Math.max(-3, Math.min(3, (cur - base) / Math.abs(base)));
+    };
+    const grossMargin = (q: Q | undefined): number | null => {
+      if (!q || q.rev === undefined || q.cogs === undefined || q.rev === 0) return null;
+      return (q.rev + q.cogs) / q.rev; // cogs is already negative
+    };
+    const marginTrendOf = (m: Map<number, Q> | undefined): number | null => {
+      const L = latestQuarterKey(m);
+      if (L < 0) return null;
+      const cur = grossMargin(m!.get(L));
+      const base = grossMargin(m!.get(L - 4));
+      return cur === null || base === null ? null : cur - base;
+    };
 
     // Per-symbol freshness: the live worker only fills daily_bar every session for the
     // handful of names that reach the deep funnel that day (see funnel/deep.ts) — most of
@@ -325,6 +389,8 @@ export async function GET() {
       const der = assets !== null && equity !== null && equity > 0 && assets > equity ? (assets - equity) / equity : null;
       const roe = niTtm !== null && equity && equity > 0 ? niTtm / equity : null;
       const niYoy = niYoyOf(m);
+      const revYoy = revYoyOf(m);
+      const marginTrendPP = marginTrendOf(m);
       const marketCap = typeof yfRow.marketCap === "number" ? yfRow.marketCap : null;
       const bp = equity && equity > 0 && marketCap && marketCap > 0 ? equity / marketCap : null;
       const ep = niTtm !== null && marketCap && marketCap > 0 ? niTtm / marketCap : null;
@@ -362,6 +428,8 @@ export async function GET() {
         der,
         roe,
         niYoy,
+        revYoy,
+        marginTrendPP,
         bp,
         ep,
         quality,
@@ -378,6 +446,7 @@ export async function GET() {
       nonBank: rows.filter((r) => !r.isBank).map(pick).filter((v): v is number => v !== null).sort((a, b) => a - b)
     });
     const niYoyPeer = splitSorted((r) => r.niYoy);
+    const revYoyPeer = splitSorted((r) => r.revYoy);
     const bpPeer = splitSorted((r) => r.bp);
     const epPeer = splitSorted((r) => r.ep);
     const roePeer = splitSorted((r) => r.roe);
@@ -395,12 +464,18 @@ export async function GET() {
 
     for (const r of rows) {
       const niYoyPct = peerPercentile(niYoyPeer, r.isBank, r.niYoy);
+      const revYoyPct = peerPercentile(revYoyPeer, r.isBank, r.revYoy);
       const bpPct = peerPercentile(bpPeer, r.isBank, r.bp);
       const epPct = peerPercentile(epPeer, r.isBank, r.ep);
       const roePct = peerPercentile(roePeer, r.isBank, r.roe);
       const ret20Pct = r.ret20 !== null ? percentileRank(ret20Sorted, r.ret20) : NaN;
 
-      const isGrowth = r.niYoy !== null && r.niYoy > 0 && niYoyPct >= 2 / 3;
+      // Revenue growth (top line) is now the primary growth signal — steadier than NI
+      // alone, which a one-off gain/loss can swing (see REVENUE GROWTH in the module
+      // docstring). NI growth is kept as a confirming check: profit should follow revenue.
+      // Bank names have no revYoy (ARJUM doesn't expose a single revenue line for banks in
+      // this format) so they cannot qualify for growth, consistent with DER's bank exemption.
+      const isGrowth = r.revYoy !== null && r.revYoy > 0 && revYoyPct >= 2 / 3 && r.niYoy !== null && r.niYoy > 0;
       const isValue = r.bp !== null && bpPct >= 2 / 3 && r.ep !== null && r.ep > 0;
       const isQuality = r.quality === true;
       const isSmall = r.marketCap !== null && Number.isFinite(medianMcap) && r.marketCap <= medianMcap;
