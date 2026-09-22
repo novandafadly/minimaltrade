@@ -192,7 +192,7 @@ export interface ShadowResponse {
   generatedAt: string;
 }
 
-export type FundamentalCategory = "growth" | "value" | "quality" | "hidden_gem" | "caution";
+export type FundamentalCategory = "best_overall" | "growth" | "value" | "quality" | "hidden_gem" | "caution";
 
 export interface FundamentalRow {
   symbol: string;
@@ -220,6 +220,9 @@ export interface FundamentalRow {
   bp: number | null;
   ep: number | null;
   quality: boolean | null;
+  /** mean percentile rank (0-100) of ROE, BP, EP, NIyoy — null unless quality passes and
+   * all four are present. Used to rank the best_overall category; not itself a flag. */
+  compositeScore: number | null;
   flags: string[];
 }
 

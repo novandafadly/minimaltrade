@@ -36,11 +36,15 @@ these are percentile-based against the day's universe.
 
 | category | rule |
 |---|---|
+| best_overall | **not another independent flag** — mean percentile rank of ROE, BP, EP and NIyoy among Quality-passing names with all four present, sorted best-first, capped to the top 15 |
 | growth | earnings growth YoY (NIyoy) in the top third, and positive |
 | value | book-to-price in the top third AND currently profitable (EP > 0) |
 | quality | hygiene only: TTM net income > 0, TTM operating cash flow > 0, ROE > 0 |
 | hidden_gem | quality AND value AND below-median market cap AND below-median 20-day return |
 | caution | top-decile 20-day return WITHOUT earnings growth or quality behind it |
+
+`best_overall` requires every one of ROE/BP/EP/NIyoy to be present — a name can't rank highly
+on one strong number while the rest are simply unknown (missing data ≠ good data).
 
 ## Refreshing the Yahoo Finance data
 
