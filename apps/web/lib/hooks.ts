@@ -170,3 +170,11 @@ export function useShadow() {
     refetchInterval: 60_000
   });
 }
+
+export function useFundamentals() {
+  return useQuery({
+    queryKey: ["fundamentals"],
+    queryFn: () => fetchJson<import("./types").FundamentalsResponse>("/api/fundamentals"),
+    staleTime: 60 * 60_000 // fundamentals move slowly (quarterly/daily); no need to refetch often
+  });
+}

@@ -191,3 +191,43 @@ export interface ShadowResponse {
   recent: ShadowRecentRow[];
   generatedAt: string;
 }
+
+export type FundamentalCategory = "growth" | "value" | "quality" | "hidden_gem" | "caution";
+
+export interface FundamentalRow {
+  symbol: string;
+  close: number;
+  /** date of the price used for `close`/`ret20` — most of the universe is only refreshed
+   * by periodic bulk backfills, not every session, so this can lag `asOf` by up to 10 days. */
+  priceAsOf: string;
+  ret20: number | null;
+  avgTurnover: number;
+  sector: string | null;
+  industry: string | null;
+  marketCap: number | null;
+  trailingPE: number | null;
+  forwardPE: number | null;
+  priceToBook: number | null;
+  dividendYield: number | null;
+  beta: number | null;
+  recommendationKey: string | null;
+  targetMeanPrice: number | null;
+  niTtm: number | null;
+  ocfTtm: number | null;
+  equity: number | null;
+  roe: number | null;
+  niYoy: number | null;
+  bp: number | null;
+  ep: number | null;
+  quality: boolean | null;
+  flags: string[];
+}
+
+export interface FundamentalsResponse {
+  asOf: string | null;
+  universe: number;
+  coverage: { yfinance: number; fundamentals: number };
+  categories: Record<FundamentalCategory, string[]>;
+  rows: Record<string, FundamentalRow>;
+  generatedAt: string;
+}
