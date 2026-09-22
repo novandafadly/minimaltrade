@@ -39,12 +39,30 @@ these are percentile-based against the day's universe.
 | best_overall | **not another independent flag** — mean percentile rank of ROE, BP, EP and NIyoy among Quality-passing names with all four present, sorted best-first, capped to the top 15 |
 | growth | earnings growth YoY (NIyoy) in the top third, and positive |
 | value | book-to-price in the top third AND currently profitable (EP > 0) |
-| quality | hygiene only: TTM net income > 0, TTM operating cash flow > 0, ROE > 0 |
+| quality | hygiene only: TTM net income > 0, TTM operating cash flow > 0, ROE > 0, AND (non-banks only) debt-to-equity not excessive |
 | hidden_gem | quality AND value AND below-median market cap AND below-median 20-day return |
 | caution | top-decile 20-day return WITHOUT earnings growth or quality behind it |
 
 `best_overall` requires every one of ROE/BP/EP/NIyoy to be present — a name can't rank highly
 on one strong number while the rest are simply unknown (missing data ≠ good data).
+
+## Leverage (DER) and the bank/non-bank split
+
+Two gaps fixed after the first version shipped:
+
+- **Leverage.** ROE alone can be misleading — a thin equity base inflates it without the
+  business being more productive. This dataset's own UNVR showed ROE 130%, a leverage/
+  buyback artifact, not organic profitability. `der = (assets - equity) / equity`, derived
+  from the balance-sheet identity using the same equity figure as BP/EP/ROE. The `quality`
+  gate now rejects `der > 2.0` for non-banks (banks are structurally leveraged by the nature
+  of the business — deposits are liabilities — so the DER gate doesn't apply to them).
+- **Bank vs non-bank.** Banks' financial-statement layout is completely different
+  (`liabilitas_dana_syirkah_temporer_dan_ekuitas`, a sharia-banking disclosure requirement,
+  vs `liabilitas_dan_ekuitas` for everyone else) and their ROE/BP/EP/NIyoy aren't comparable
+  to industrials or consumer names — mixing them in one percentile ranking unfairly penalizes
+  or flatters one group. This is exactly why [Phase 0I](BACKTEST_PHASE0I.md) reports "all"
+  and "non-bank" separately. ROE/BP/EP/NIyoy percentiles here are computed within each name's
+  own peer group (bank vs non-bank), not the whole universe.
 
 ## Refreshing the Yahoo Finance data
 

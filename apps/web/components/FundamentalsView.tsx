@@ -19,7 +19,8 @@ const CATEGORY_BLURB: Record<FundamentalCategory, string> = {
     "Not another independent flag — a single composite rank (mean percentile of ROE, book-to-price, earnings-to-price and NI growth) among Quality-passing names that have ALL four numbers available, sorted best-first. Scores well across value, quality AND growth at once, not just one of them — capped to the top 15.",
   growth: "Earnings growth (YoY) in the top third of the universe, and positive.",
   value: "Cheap relative to book value (top third) AND currently profitable — not cheap because something is broken.",
-  quality: "Hygiene only: trailing 4-quarter net income > 0, operating cash flow > 0, ROE > 0.",
+  quality:
+    "Hygiene only: trailing 4-quarter net income > 0, operating cash flow > 0, ROE > 0, and (non-banks only) debt-to-equity not excessive — a thin equity base can inflate ROE without the business actually being more productive.",
   hidden_gem: "Quality AND Value AND below-median market cap AND hasn't rallied yet (below-median 20-day return) — fundamentally fine, cheap, small, still under the radar on price.",
   caution: "The mirror image: a top-decile 20-day price rally WITHOUT earnings growth or quality behind it — priced up without fundamentals to support it."
 };
@@ -52,6 +53,7 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
             <th>Price (as of)</th>
             <th>Mkt cap</th>
             <th>ROE</th>
+            <th>DER</th>
             <th>NI YoY</th>
             <th>P/E (TTM)</th>
             <th>P/B</th>
@@ -63,7 +65,10 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
         <tbody>
           {rows.map((r) => (
             <tr key={r.symbol}>
-              <td>{r.symbol}</td>
+              <td>
+                {r.symbol}
+                {r.isBank ? <span className="price-as-of"> (bank)</span> : null}
+              </td>
               <td>{r.compositeScore === null ? "—" : r.compositeScore.toFixed(0)}</td>
               <td>{r.sector ?? "—"}</td>
               <td>
@@ -71,6 +76,7 @@ function CategoryTable({ rows }: { rows: FundamentalRow[] }) {
               </td>
               <td>{rupiahCompact(r.marketCap)}</td>
               <td>{pct(r.roe)}</td>
+              <td>{r.isBank ? "n/a (bank)" : num(r.der, 2)}</td>
               <td>{pct(r.niYoy)}</td>
               <td>{num(r.trailingPE)}</td>
               <td>{num(r.priceToBook)}</td>
@@ -106,7 +112,12 @@ function FundamentalsBody({ data }: { data: FundamentalsResponse }) {
         Finance data for {data.coverage.yfinance}). Not every name refreshes daily — the live
         worker only updates the handful of stocks that reach its deep-funnel screen each session,
         the rest come from periodic bulk backfills — so each row shows its own price date; prices
-        up to 10 days old are still shown, older ones are dropped.
+        up to 10 days old are still shown, older ones are dropped. ROE, book-to-price,
+        earnings-to-price and earnings growth are ranked against each stock's own peer group
+        (banks vs everyone else) — banks' financial statements are structured completely
+        differently and their ratios aren't comparable to industrials or consumer names, so
+        a bank is only ranked against other banks. Debt-to-equity is shown for context but
+        not applied to banks (leverage is structural to how banks operate).
       </p>
 
       <nav className="view-tabs">
